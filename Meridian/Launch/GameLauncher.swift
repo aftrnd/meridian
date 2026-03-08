@@ -66,6 +66,13 @@ final class GameLauncher {
 
         // 2. Start the VM if it is not already running.
         if !vmManager.state.isRunning {
+            // If the image was just provisioned the state may still be .notProvisioned;
+            // updateProvisionedState() fixes that — but if the image is genuinely missing,
+            // we can't start.
+            if case .notProvisioned = vmManager.state {
+                launchState = .failed("VM image not found. Please provision the VM first.")
+                return
+            }
             do {
                 try await vmManager.start()
             } catch {

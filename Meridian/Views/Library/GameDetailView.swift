@@ -174,9 +174,15 @@ struct GameDetailView: View {
         }
     }
 
+    /// Play is always tappable — handlePlayTapped() decides what to show:
+    ///   - not provisioned  → provision sheet
+    ///   - not authenticated → shown on the auth screen anyway, but guard here too
+    ///   - transitioning     → disable so rapid double-taps don't queue launches
     private var canLaunch: Bool {
-        steamAuth.isAuthenticated &&
-        (vmManager.state.isRunning || vmManager.state == .stopped)
+        guard steamAuth.isAuthenticated else { return false }
+        // Disable while the VM is actively transitioning (starting/stopping/downloading)
+        // so rapid taps don't queue multiple launches.
+        return !vmManager.state.isTransitioning
     }
 
     private var vmStatusPill: some View {

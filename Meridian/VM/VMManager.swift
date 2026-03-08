@@ -76,9 +76,12 @@ final class VMManager: NSObject {
         }
     }
 
-    /// Starts the VM. No-op if already running.
+    /// Starts the VM. Throws if not in `.stopped` state.
     func start() async throws {
-        guard case .stopped = state else { return }
+        guard case .stopped = state else {
+            if state.isRunning { return }  // already running — no-op
+            throw VMError.notStopped
+        }
         state = .starting
 
         do {
@@ -190,11 +193,13 @@ final class VMManager: NSObject {
     enum VMError: LocalizedError {
         case managerDeallocated
         case notRunning
+        case notStopped
 
         var errorDescription: String? {
             switch self {
             case .managerDeallocated: return "VM manager was deallocated."
             case .notRunning:         return "VM is not running."
+            case .notStopped:         return "VM cannot start from its current state."
             }
         }
     }
