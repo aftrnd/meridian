@@ -1,19 +1,30 @@
 import Foundation
 import Observation
-import CryptoKit
 
 /// Fetches, caches, and assembles the Meridian VM base image from GitHub Releases.
 ///
 /// Design:
-/// - Uses the GitHub REST API  `GET /repos/{owner}/{repo}/releases/latest`
+/// - Uses the GitHub REST API `GET /repos/{owner}/{repo}/releases/latest`
 ///   to discover the current image tag and download URLs dynamically.
-/// - The repo slug (`owner/repo`) is configurable in Settings so users can
-///   self-host or use a fork without recompiling.
-/// - A release is expected to contain assets named `meridian-base.img.part1`
-///   and `meridian-base.img.part2` (split due to GitHub's 2 GiB asset limit).
-///   The assembled image is stored in Application Support.
-/// - On launch the app checks the latest release tag; if it differs from the
-///   cached tag, it offers/performs an update.
+/// - The repo slug (`owner/repo`) is configurable in Settings so the production
+///   repo can change without recompilation.
+/// - A release must contain assets named:
+///     meridian-base.img.part1   — split rootfs (≤ 2 GiB each)
+///     meridian-base.img.part2   — split rootfs
+///     vmlinuz                   — Linux kernel (ARM64)
+///     initrd                    — initial RAM disk
+///   vmlinuz and initrd are downloaded alongside the rootfs parts so that
+///   VMConfiguration.makeBootLoader() can always find them.
+/// - On every launch the app checks the latest release tag; if it differs from
+///   the cached tag it offers an update.
+///
+/// Fixes vs. previous implementation:
+///   - assembleImage() now runs off the main thread (Task.detached); only state
+///     updates are marshalled back to @MainActor.
+///   - Progress bytes for part 2 were previously doubled (received * partIndex+1).
+///     Now each part tracks its own received bytes and reports a combined total.
+///   - Final buffer flush now also reports progress so the bar reaches 100%.
+///   - vmlinuz and initrd are downloaded as separate assets.
 @Observable
 @MainActor
 final class VMImageProvider {
@@ -21,7 +32,7 @@ final class VMImageProvider {
     // MARK: - State
 
     private(set) var state: ImageProviderState = .idle
-    private(set) var cachedTag: String? = nil
+    private(set) var cachedTag: String?
 
     // MARK: - Paths
 
@@ -33,12 +44,15 @@ final class VMImageProvider {
     }()
 
     var assembledImageURL: URL { Self.supportDir.appending(path: "meridian-base.img") }
-    private var tagCacheURL:  URL { Self.supportDir.appending(path: "image.tag") }
-    private var part1URL:     URL { Self.supportDir.appending(path: "meridian-base.img.part1") }
-    private var part2URL:     URL { Self.supportDir.appending(path: "meridian-base.img.part2") }
+    private var tagCacheURL: URL { Self.supportDir.appending(path: "image.tag") }
+    private var part1URL:    URL { Self.supportDir.appending(path: "meridian-base.img.part1") }
+    private var part2URL:    URL { Self.supportDir.appending(path: "meridian-base.img.part2") }
+    private var kernelURL:   URL { Self.supportDir.appending(path: "vmlinuz") }
+    private var initrdURL:   URL { Self.supportDir.appending(path: "initrd") }
 
     var isImageReady: Bool {
-        FileManager.default.fileExists(atPath: assembledImageURL.path())
+        FileManager.default.fileExists(atPath: assembledImageURL.path()) &&
+        FileManager.default.fileExists(atPath: kernelURL.path())
     }
 
     // MARK: - Init
@@ -63,7 +77,9 @@ final class VMImageProvider {
         }
     }
 
-    /// Downloads and assembles the latest base image, calling `progress` on the main actor.
+    /// Downloads all assets (kernel, initrd, rootfs parts) for the latest release.
+    ///
+    /// - Parameter onProgress: Called on the main actor with (overallFraction, bytesReceived, bytesTotal).
     func downloadLatestImage(onProgress: @escaping @MainActor (Double, Int64, Int64) -> Void) async throws {
         let release = try await fetchLatestRelease()
 
@@ -73,20 +89,78 @@ final class VMImageProvider {
             throw ImageError.assetsNotFound(release.tagName)
         }
 
-        // Download both parts with combined progress
+        // Optional assets — older images may not include updated kernel files.
+        let kernelAsset = release.assets.first(where: { $0.name == "vmlinuz" })
+        let initrdAsset  = release.assets.first(where: { $0.name == "initrd" })
+
+        // Build ordered download list. Kernel and initrd come first (small) so
+        // VMConfiguration.makeBootLoader() can validate them early.
+        var downloads: [(asset: GitHubAsset, destination: URL, label: String)] = []
+        if let k = kernelAsset { downloads.append((k, kernelURL,  "vmlinuz")) }
+        if let i = initrdAsset  { downloads.append((i, initrdURL,  "initrd")) }
+        downloads.append((part1Asset, part1URL, "image part 1"))
+        downloads.append((part2Asset, part2URL, "image part 2"))
+
+        // Compute combined total size for accurate overall progress.
+        let grandTotal = downloads.reduce(Int64(0)) { $0 + Int64($1.asset.size) }
+        var grandReceived: Int64 = 0
+
         state = .downloading(0)
-        try await downloadPart(url: part1Asset.browserDownloadURL, to: part1URL, partIndex: 0, totalParts: 2, onProgress: onProgress)
-        try await downloadPart(url: part2Asset.browserDownloadURL, to: part2URL, partIndex: 1, totalParts: 2, onProgress: onProgress)
 
-        // Assemble
-        state = .assembling
-        try assembleImage()
+        for (index, item) in downloads.enumerated() {
+            let startReceived = grandReceived
+            try await downloadAsset(
+                url: item.asset.browserDownloadURL,
+                to: item.destination
+            ) { [weak self] received, _ in
+                // This callback fires frequently from URLSession — keep it lightweight.
+                let combined = startReceived + received
+                let fraction = Double(combined) / Double(max(grandTotal, 1))
+                let totalForDisplay = grandTotal
+                Task { @MainActor [weak self] in
+                    self?.state = .downloading(fraction)
+                    onProgress(fraction, combined, totalForDisplay)
+                }
+            }
+            grandReceived += Int64(item.asset.size)
+            _ = index // suppress unused warning
+        }
+    }
 
-        // Persist new tag
-        cachedTag = release.tagName
-        try release.tagName.write(to: tagCacheURL, atomically: true, encoding: .utf8)
+    /// Assembles the two rootfs parts into `meridian-base.img`.
+    ///
+    /// Runs the file I/O on a background thread to avoid blocking the main actor.
+    /// Callers should set `state = .assembling` before calling this.
+    func assembleImageAsync() async throws {
+        let part1 = part1URL
+        let part2 = part2URL
+        let output = assembledImageURL
 
-        // Clean up parts
+        try await Task.detached(priority: .userInitiated) {
+            if FileManager.default.fileExists(atPath: output.path()) {
+                try FileManager.default.removeItem(at: output)
+            }
+            guard FileManager.default.createFile(atPath: output.path(), contents: nil) else {
+                throw ImageError.diskWriteFailed
+            }
+            let outHandle = try FileHandle(forWritingTo: output)
+            defer { try? outHandle.close() }
+
+            for partURL in [part1, part2] {
+                let inHandle = try FileHandle(forReadingFrom: partURL)
+                defer { try? inHandle.close() }
+                while let chunk = try inHandle.read(upToCount: 1024 * 1024), !chunk.isEmpty {
+                    try outHandle.write(contentsOf: chunk)
+                }
+            }
+        }.value
+
+        // Persist the release tag
+        if let tag = cachedTag {
+            try tag.write(to: tagCacheURL, atomically: true, encoding: .utf8)
+        }
+
+        // Clean up downloaded parts
         try? FileManager.default.removeItem(at: part1URL)
         try? FileManager.default.removeItem(at: part2URL)
 
@@ -95,6 +169,8 @@ final class VMImageProvider {
 
     // MARK: - GitHub API
 
+    /// Fetches the latest GitHub release. Result is reused by both checkForUpdate
+    /// and downloadLatestImage via the public API to avoid a redundant request.
     private func fetchLatestRelease() async throws -> GitHubRelease {
         let slug = AppSettings.shared.imageRepoSlug
         guard let url = URL(string: "https://api.github.com/repos/\(slug)/releases/latest") else {
@@ -102,29 +178,36 @@ final class VMImageProvider {
         }
         var request = URLRequest(url: url)
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
+        request.setValue("2022-11-28",                 forHTTPHeaderField: "X-GitHub-Api-Version")
+
         let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+        guard let http = response as? HTTPURLResponse else { throw ImageError.githubError }
+
+        switch http.statusCode {
+        case 200:
+            return try JSONDecoder().decode(GitHubRelease.self, from: data)
+        case 403, 429:
+            throw ImageError.rateLimited
+        case 404:
+            throw ImageError.releaseNotFound(slug)
+        default:
             throw ImageError.githubError
         }
-        return try JSONDecoder().decode(GitHubRelease.self, from: data)
     }
 
-    // MARK: - Download with progress
+    // MARK: - Download
 
-    private func downloadPart(
+    private func downloadAsset(
         url: URL,
         to destination: URL,
-        partIndex: Int,
-        totalParts: Int,
-        onProgress: @escaping @MainActor (Double, Int64, Int64) -> Void
+        onProgress: @escaping @Sendable (Int64, Int64) -> Void
     ) async throws {
         let (asyncBytes, response) = try await URLSession.shared.bytes(from: url)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw ImageError.downloadFailed(url.lastPathComponent)
         }
 
-        let total = http.expectedContentLength
+        let contentLength = http.expectedContentLength  // -1 if unknown
         var received: Int64 = 0
 
         guard FileManager.default.createFile(atPath: destination.path(), contents: nil) else {
@@ -133,42 +216,22 @@ final class VMImageProvider {
         let handle = try FileHandle(forWritingTo: destination)
         defer { try? handle.close() }
 
-        var buffer = Data(capacity: 1024 * 1024)
+        let bufferTarget = 512 * 1024
+        var buffer = Data(capacity: bufferTarget)
 
         for try await byte in asyncBytes {
             buffer.append(byte)
             received += 1
-            if buffer.count >= 512 * 1024 {
+            if buffer.count >= bufferTarget {
                 try handle.write(contentsOf: buffer)
                 buffer.removeAll(keepingCapacity: true)
-                let partProgress = Double(received) / Double(max(total, 1))
-                let overallProgress = (Double(partIndex) + partProgress) / Double(totalParts)
-                onProgress(overallProgress, received * Int64(partIndex + 1), total * Int64(totalParts))
+                onProgress(received, max(contentLength, received))
             }
         }
+        // Flush remainder and report final progress
         if !buffer.isEmpty {
             try handle.write(contentsOf: buffer)
-        }
-    }
-
-    // MARK: - Assembly
-
-    private func assembleImage() throws {
-        if FileManager.default.fileExists(atPath: assembledImageURL.path()) {
-            try FileManager.default.removeItem(at: assembledImageURL)
-        }
-        guard FileManager.default.createFile(atPath: assembledImageURL.path(), contents: nil) else {
-            throw ImageError.diskWriteFailed
-        }
-        let output = try FileHandle(forWritingTo: assembledImageURL)
-        defer { try? output.close() }
-
-        for partURL in [part1URL, part2URL] {
-            let input = try FileHandle(forReadingFrom: partURL)
-            defer { try? input.close() }
-            while let chunk = try input.read(upToCount: 1024 * 1024), !chunk.isEmpty {
-                try output.write(contentsOf: chunk)
-            }
+            onProgress(received, max(contentLength, received))
         }
     }
 
@@ -185,17 +248,28 @@ final class VMImageProvider {
     enum ImageError: LocalizedError {
         case badURL
         case githubError
+        case rateLimited
+        case releaseNotFound(String)
         case assetsNotFound(String)
         case downloadFailed(String)
         case diskWriteFailed
 
         var errorDescription: String? {
             switch self {
-            case .badURL:              return "Invalid GitHub API URL. Check the repo slug in Settings."
-            case .githubError:         return "GitHub API returned an unexpected response."
-            case .assetsNotFound(let t): return "No split image assets found in release \(t)."
-            case .downloadFailed(let f): return "Download failed for \(f)."
-            case .diskWriteFailed:     return "Could not write to disk. Check available storage."
+            case .badURL:
+                return "Invalid GitHub API URL. Check the repo slug in Settings."
+            case .githubError:
+                return "GitHub API returned an unexpected response."
+            case .rateLimited:
+                return "GitHub API rate limit reached. Please wait a minute and try again."
+            case .releaseNotFound(let slug):
+                return "No releases found for \(slug). Check the repo slug in Settings."
+            case .assetsNotFound(let tag):
+                return "No split image assets found in release \(tag)."
+            case .downloadFailed(let file):
+                return "Download failed for \(file)."
+            case .diskWriteFailed:
+                return "Could not write to disk. Check available storage."
             }
         }
     }

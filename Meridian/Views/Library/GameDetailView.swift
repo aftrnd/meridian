@@ -4,13 +4,13 @@ import Virtualization
 struct GameDetailView: View {
     let game: Game
 
-    @Environment(VMManager.self) private var vmManager
-    @Environment(SteamAuthService.self) private var steamAuth
+    @Environment(VMManager.self)          private var vmManager
+    @Environment(SteamAuthService.self)   private var steamAuth
     @Environment(SteamSessionBridge.self) private var sessionBridge
-    @Environment(GameLauncher.self) private var launcher
+    @Environment(GameLauncher.self)       private var launcher
 
     @State private var showProvisionSheet = false
-    @State private var showVMView = false
+    @State private var showVMView         = false
 
     var body: some View {
         ScrollView {
@@ -32,7 +32,7 @@ struct GameDetailView: View {
                 .environment(vmManager)
         }
         .sheet(isPresented: $showVMView) {
-            VMGameWindow(vmManager: vmManager)
+            VMGameWindow(vmManager: vmManager, launcher: launcher)
         }
     }
 
@@ -99,11 +99,35 @@ struct GameDetailView: View {
             .controlSize(.large)
             .disabled(!canLaunch)
 
-        case .preparingVM, .launching:
+        case .preparingVM, .connectingBridge:
             Button {} label: {
-                HStack {
+                HStack(spacing: 6) {
                     ProgressView().scaleEffect(0.8)
-                    Text(launcher.launchState == .preparingVM ? "Starting VM…" : "Launching…")
+                    Text(launcher.launchState == .preparingVM ? "Starting VM…" : "Connecting…")
+                }
+                .frame(minWidth: 120)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .disabled(true)
+
+        case .launching:
+            Button {} label: {
+                HStack(spacing: 6) {
+                    ProgressView().scaleEffect(0.8)
+                    Text("Launching…")
+                }
+                .frame(minWidth: 120)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .disabled(true)
+
+        case .installing(_, let pct):
+            Button {} label: {
+                HStack(spacing: 6) {
+                    ProgressView(value: pct / 100).frame(width: 60)
+                    Text("Installing \(Int(pct))%")
                 }
                 .frame(minWidth: 120)
             }
@@ -112,15 +136,25 @@ struct GameDetailView: View {
             .disabled(true)
 
         case .running:
-            Button {
-                showVMView = true
-            } label: {
-                Label("Running", systemImage: "play.circle.fill")
-                    .font(.headline)
-                    .frame(minWidth: 120)
+            HStack(spacing: 8) {
+                Button {
+                    showVMView = true
+                } label: {
+                    Label("Running", systemImage: "play.circle.fill")
+                        .font(.headline)
+                        .frame(minWidth: 100)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+
+                Button {
+                    Task { await launcher.stopGame() }
+                } label: {
+                    Label("Stop", systemImage: "stop.fill")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
 
         case .failed(let msg):
             VStack(alignment: .leading, spacing: 4) {
@@ -135,12 +169,14 @@ struct GameDetailView: View {
                 Text(msg)
                     .font(.caption)
                     .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
 
     private var canLaunch: Bool {
-        steamAuth.isAuthenticated && (vmManager.state.isRunning || vmManager.state == .stopped)
+        steamAuth.isAuthenticated &&
+        (vmManager.state.isRunning || vmManager.state == .stopped)
     }
 
     private var vmStatusPill: some View {
@@ -183,19 +219,28 @@ struct GameDetailView: View {
             Text("Launch Log")
                 .font(.subheadline)
                 .fontWeight(.semibold)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 2) {
-                    ForEach(Array(launcher.logs.suffix(50).enumerated()), id: \.offset) { _, line in
-                        Text(line)
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        ForEach(Array(launcher.logs.enumerated()), id: \.offset) { index, line in
+                            Text(line)
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.secondary)
+                                .id(index)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+                }
+                .frame(height: 120)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
+                .onChange(of: launcher.logs.count) { _, newCount in
+                    withAnimation(.linear(duration: 0.1)) {
+                        proxy.scrollTo(newCount - 1, anchor: .bottom)
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(10)
             }
-            .frame(height: 120)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
         }
     }
 
@@ -207,27 +252,43 @@ struct GameDetailView: View {
             return
         }
         Task {
-            await launcher.launch(game: game, vmManager: vmManager, steamAuth: steamAuth, sessionBridge: sessionBridge)
+            await launcher.launch(
+                game: game,
+                vmManager: vmManager,
+                steamAuth: steamAuth,
+                sessionBridge: sessionBridge
+            )
         }
     }
 }
 
-// MARK: - VM Game Window (VZVirtualMachineView wrapper)
+// MARK: - VM Game Window (full-screen VM view)
 
 struct VMGameWindow: View {
     let vmManager: VMManager
+    let launcher: GameLauncher
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(spacing: 0) {
             HStack {
+                Circle()
+                    .fill(.green)
+                    .frame(width: 8, height: 8)
                 Text("Running in Meridian VM")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button("Stop") { dismiss() }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                Button {
+                    Task {
+                        await launcher.stopGame()
+                        dismiss()
+                    }
+                } label: {
+                    Label("Stop Game", systemImage: "stop.fill")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -240,7 +301,16 @@ struct VMGameWindow: View {
     }
 }
 
-// NSViewRepresentable wrapping VZVirtualMachineView
+// MARK: - VZVirtualMachineView SwiftUI wrapper
+
+/// Wraps VZVirtualMachineView as an NSViewRepresentable.
+///
+/// makeNSView returns the shared cached view from VMManager — this is important
+/// because VZVirtualMachineView must not be recreated per SwiftUI render cycle.
+///
+/// updateNSView re-assigns virtualMachine so that if the VM is restarted (new
+/// VZVirtualMachine instance), the view picks up the new machine without
+/// requiring the sheet to be dismissed and re-shown.
 struct VMDisplayView: NSViewRepresentable {
     let vmManager: VMManager
 
@@ -248,5 +318,9 @@ struct VMDisplayView: NSViewRepresentable {
         vmManager.vmView
     }
 
-    func updateNSView(_ view: VZVirtualMachineView, context: Context) {}
+    func updateNSView(_ view: VZVirtualMachineView, context: Context) {
+        if view.virtualMachine !== vmManager.virtualMachine {
+            view.virtualMachine = vmManager.virtualMachine
+        }
+    }
 }

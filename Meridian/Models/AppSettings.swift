@@ -32,6 +32,18 @@ final class AppSettings: @unchecked Sendable {
         set { UserDefaults.standard.set(newValue, forKey: "keepVMRunning") }
     }
 
+    /// VM display width in pixels (default: 1920)
+    var vmDisplayWidth: Int {
+        get { UserDefaults.standard.integer(forKey: "vmDisplayWidth").nonZero ?? 1920 }
+        set { UserDefaults.standard.set(newValue, forKey: "vmDisplayWidth") }
+    }
+
+    /// VM display height in pixels (default: 1080)
+    var vmDisplayHeight: Int {
+        get { UserDefaults.standard.integer(forKey: "vmDisplayHeight").nonZero ?? 1080 }
+        set { UserDefaults.standard.set(newValue, forKey: "vmDisplayHeight") }
+    }
+
     /// GitHub repo slug used to fetch Meridian base image releases, e.g. "aftrnd/meridian"
     var imageRepoSlug: String {
         get { UserDefaults.standard.string(forKey: "imageRepoSlug") ?? "aftrnd/meridian" }

@@ -5,9 +5,14 @@ import Foundation
 /// Manages the full Meridian VM lifecycle using Apple's Virtualization.framework.
 ///
 /// Threading model:
-///   - @Observable @MainActor: published state updates happen on main thread
-///   - VZVirtualMachine must be created and called on the same serial queue
-///   - We use a dedicated `vmQueue` for all VZ calls and marshal state back to MainActor
+///   - @Observable @MainActor: published state updates happen on main thread.
+///   - VZVirtualMachine must be created and called on the same serial queue.
+///   - We use a dedicated `vmQueue` for all VZ calls and marshal state back to MainActor.
+///
+/// vmView ownership:
+///   The VZVirtualMachineView is created once and cached. On VM restart we
+///   re-assign its `virtualMachine` property rather than recreating the view;
+///   recreating it causes a black-frame flash and loses SwiftUI layout state.
 @Observable
 @MainActor
 final class VMManager: NSObject {
@@ -19,7 +24,12 @@ final class VMManager: NSObject {
 
     // MARK: - Private
 
-    private var virtualMachine: VZVirtualMachine?
+    /// The running VZVirtualMachine. Nil when stopped.
+    private(set) var virtualMachine: VZVirtualMachine?
+
+    /// Cached VZVirtualMachineView — created once, `virtualMachine` updated on restart.
+    private var _vmView: VZVirtualMachineView?
+
     private let vmQueue = DispatchQueue(label: "com.meridian.vm", qos: .userInteractive)
     private var startContinuation: CheckedContinuation<Void, Error>?
 
@@ -32,14 +42,35 @@ final class VMManager: NSObject {
 
     // MARK: - Public API
 
-    /// Provisions the VM by downloading + assembling the Meridian base image.
+    /// The virtio-vsock device for ProtonBridge. Only non-nil when VM is running.
+    var socketDevice: VZVirtioSocketDevice? {
+        virtualMachine?.socketDevices.first as? VZVirtioSocketDevice
+    }
+
+    /// Returns the shared VZVirtualMachineView, creating it on first access.
+    /// Updating virtualMachine is handled internally — callers just hold the reference.
+    var vmView: VZVirtualMachineView {
+        if let existing = _vmView { return existing }
+        let view = VZVirtualMachineView()
+        view.virtualMachine = virtualMachine
+        view.capturesSystemKeys = true
+        _vmView = view
+        return view
+    }
+
+    /// Provisions the VM: downloads + assembles the Meridian base image (kernel + rootfs).
     func provision() async {
         state = .checkingForUpdate
         do {
             try await imageProvider.downloadLatestImage { [weak self] progress, received, total in
-                self?.state = .downloading(progress: progress, bytesReceived: received, bytesTotal: total)
+                Task { @MainActor [weak self] in
+                    self?.state = .downloading(progress: progress, bytesReceived: received, bytesTotal: total)
+                }
             }
+            state = .assembling
+            try await imageProvider.assembleImageAsync()
             state = .stopped
+            updateProvisionedState()
         } catch {
             state = .error(error.localizedDescription)
         }
@@ -67,11 +98,18 @@ final class VMManager: NSObject {
                     }
                 }
             }
+
             virtualMachine = vm
+            // Keep the cached view pointing to the new VM instance
+            _vmView?.virtualMachine = vm
+
             let sendableVM = SendableVM(raw: vm)
 
             try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-                startContinuation = cont
+                // Store continuation before dispatching so the completion handler
+                // can always find it — avoids a narrow race if start() returns
+                // synchronously on some future hardware.
+                Task { @MainActor [weak self] in self?.startContinuation = cont }
                 vmQueue.async {
                     sendableVM.raw.start { result in
                         Task { @MainActor [weak self] in
@@ -94,10 +132,11 @@ final class VMManager: NSObject {
         }
     }
 
-    /// Stops the VM gracefully (requests guest shutdown, then forces after timeout).
+    /// Requests a clean guest shutdown, falling back to force-stop after 10 s.
     func stop() async {
-        guard case .ready = state else { return }
+        guard state.isRunning else { return }
         state = .stopping
+
         let vmToStop = virtualMachine.map { SendableVM(raw: $0) }
 
         do {
@@ -116,39 +155,29 @@ final class VMManager: NSObject {
                 }
             }
         } catch {
-            // Guest stop failed; force-stop
             await forceStop()
             return
         }
 
-        // Give the guest up to 10 seconds to shut down cleanly
         let deadline = ContinuousClock.now + .seconds(10)
         while case .stopping = state {
-            if ContinuousClock.now > deadline {
-                await forceStop()
-                return
-            }
+            if ContinuousClock.now > deadline { await forceStop(); return }
             try? await Task.sleep(for: .milliseconds(250))
         }
-    }
-
-    var vmView: VZVirtualMachineView {
-        let view = VZVirtualMachineView()
-        if let vm = virtualMachine {
-            view.virtualMachine = vm
-        }
-        view.capturesSystemKeys = true
-        return view
     }
 
     // MARK: - Private helpers
 
     private func forceStop() async {
         let vmToStop = virtualMachine.map { SendableVM(raw: $0) }
-        vmQueue.async {
-            vmToStop?.raw.stop(completionHandler: { _ in })
-        }
+        vmQueue.async { vmToStop?.raw.stop(completionHandler: { _ in }) }
+        didStop()
+    }
+
+    /// Centralised teardown so both forceStop and guestDidStop use the same path.
+    private func didStop() {
         virtualMachine = nil
+        _vmView?.virtualMachine = nil
         state = .stopped
     }
 
@@ -156,16 +185,16 @@ final class VMManager: NSObject {
         state = imageProvider.isImageReady ? .stopped : .notProvisioned
     }
 
+    // MARK: - Errors
+
     enum VMError: LocalizedError {
         case managerDeallocated
         case notRunning
 
         var errorDescription: String? {
             switch self {
-            case .managerDeallocated:
-                return "VM manager was deallocated."
-            case .notRunning:
-                return "VM is not running."
+            case .managerDeallocated: return "VM manager was deallocated."
+            case .notRunning:         return "VM is not running."
             }
         }
     }
@@ -181,14 +210,14 @@ extension VMManager: VZVirtualMachineDelegate {
     nonisolated func virtualMachine(_ vm: VZVirtualMachine, didStopWithError error: Error) {
         Task { @MainActor [weak self] in
             self?.virtualMachine = nil
+            self?._vmView?.virtualMachine = nil
             self?.state = .error(error.localizedDescription)
         }
     }
 
     nonisolated func guestDidStop(_ vm: VZVirtualMachine) {
         Task { @MainActor [weak self] in
-            self?.virtualMachine = nil
-            self?.state = .stopped
+            self?.didStop()
         }
     }
 }

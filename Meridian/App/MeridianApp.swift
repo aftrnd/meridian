@@ -4,10 +4,11 @@ import SwiftUI
 struct MeridianApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
-    @State private var steamAuth = SteamAuthService()
-    @State private var library = SteamLibraryStore()
-    @State private var vmManager = VMManager()
+    @State private var steamAuth     = SteamAuthService()
+    @State private var library       = SteamLibraryStore()
+    @State private var vmManager     = VMManager()
     @State private var sessionBridge = SteamSessionBridge()
+    @State private var launcher      = GameLauncher()
 
     var body: some Scene {
         WindowGroup {
@@ -16,6 +17,7 @@ struct MeridianApp: App {
                 .environment(library)
                 .environment(vmManager)
                 .environment(sessionBridge)
+                .environment(launcher)
                 .frame(minWidth: 960, minHeight: 620)
         }
         .windowStyle(.hiddenTitleBar)
