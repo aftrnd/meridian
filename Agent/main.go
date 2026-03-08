@@ -195,6 +195,9 @@ func launchGame(appID int, sendEvent func(event)) (*os.Process, error) {
 			"DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus",
 			"STEAM_RUNTIME":            "1",
 			"XDG_SESSION_TYPE":         "wayland",
+			"DEBIAN_FRONTEND":          "noninteractive",
+			"APT_LISTCHANGES_FRONTEND": "none",
+			"TERM":                     "dumb",
 		},
 	)
 
@@ -211,9 +214,17 @@ func launchGame(appID int, sendEvent func(event)) (*os.Process, error) {
 			Credential: &syscall.Credential{Uid: steamUID, Gid: steamGID},
 		}
 		attachCommandLogs("steam-boot", boot, sendEvent)
+		// steamdeps sometimes prompts for "press return" on first run; provide
+		// non-interactive stdin so boot does not hit EOF and abort early.
+		boot.Stdin = strings.NewReader("\n\n\n\n")
 		if err := boot.Start(); err != nil {
 			return nil, fmt.Errorf("start steam bootstrap: %w", err)
 		}
+		go func() {
+			if err := boot.Wait(); err != nil {
+				sendEvent(event{Event: "log", Line: fmt.Sprintf("steam bootstrap exited: %v", err)})
+			}
+		}()
 		// Do not wait on bootstrap here; wait for steady-state steam process below.
 	}
 
@@ -248,11 +259,16 @@ func installGame(appID int, sendEvent func(event)) {
 	cmd.Env = mergedEnv(
 		os.Environ(),
 		map[string]string{
-			"HOME":          "/home/meridian",
-			"USER":          "meridian",
-			"STEAM_RUNTIME": "1",
+			"HOME":                     "/home/meridian",
+			"USER":                     "meridian",
+			"STEAM_RUNTIME":            "1",
+			"DEBIAN_FRONTEND":          "noninteractive",
+			"APT_LISTCHANGES_FRONTEND": "none",
+			"TERM":                     "dumb",
 		},
 	)
+	// Prevent steamdeps from failing on EOF if it asks for an Enter keypress.
+	cmd.Stdin = strings.NewReader("\n\n\n\n")
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {

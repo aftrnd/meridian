@@ -11,6 +11,13 @@ Native macOS app for running Windows Steam games through a lightweight Ubuntu VM
 5. **Install if needed, then launch** through Steam + Proton inside the guest.
 6. **Render in native window** via `VZVirtualMachineView` + virtio-gpu.
 
+## UI Behavior
+
+- Main app uses a two-pane layout: sidebar + full library content.
+- Clicking a game opens a dedicated game-detail window.
+- Launch logs in game detail are selectable and can be copied with a `Copy` button.
+- VM state appears as a compact floating status pill in the library, not a full-width bar.
+
 ## Requirements
 
 - macOS 15+ (macOS 26 recommended)
@@ -71,6 +78,16 @@ bash Tests/Integration/test-guest.sh
 ```
 
 If a VM is already running on port `2222`, run with `--no-boot`.
+
+## Patch Existing Local VM Runtime (No Rebuild)
+
+If Steam boot in-guest prompts for package cache updates or fails with missing x86 loader paths, patch the current local VM image in place:
+
+```bash
+bash Scripts/patch-vm-steam-runtime.sh
+```
+
+This boots the image in QEMU, applies non-interactive Steam runtime prerequisites, then cleanly powers off.
 
 ## Base Image Hosting
 

@@ -1,5 +1,6 @@
 import SwiftUI
 import Virtualization
+import AppKit
 
 struct GameDetailView: View {
     let game: Game
@@ -242,9 +243,19 @@ struct GameDetailView: View {
 
     private var logsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Launch Log")
-                .font(.subheadline)
-                .fontWeight(.semibold)
+            HStack {
+                Text("Launch Log")
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                Spacer()
+                Button {
+                    copyLaunchLogs()
+                } label: {
+                    Label("Copy", systemImage: "doc.on.doc")
+                }
+                .buttonStyle(.borderless)
+                .help("Copy launch logs")
+            }
 
             ScrollViewReader { proxy in
                 ScrollView {
@@ -261,10 +272,9 @@ struct GameDetailView: View {
                 }
                 .frame(height: 120)
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
+                .textSelection(.enabled)
                 .onChange(of: launcher.logs.count) { _, newCount in
-                    withAnimation(.linear(duration: 0.1)) {
-                        proxy.scrollTo(newCount - 1, anchor: .bottom)
-                    }
+                    proxy.scrollTo(newCount - 1, anchor: .bottom)
                 }
             }
         }
@@ -290,6 +300,12 @@ struct GameDetailView: View {
                 library: library
             )
         }
+    }
+
+    private func copyLaunchLogs() {
+        let text = launcher.logs.joined(separator: "\n")
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 }
 

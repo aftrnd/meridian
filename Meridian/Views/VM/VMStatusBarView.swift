@@ -7,20 +7,18 @@ struct VMStatusBarView: View {
     var onSetUp: (() -> Void)?
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             VMStatusPill(state: vmManager.state)
 
             if case .downloading(let p, let rx, let total) = vmManager.state {
                 ProgressView(value: p)
                     .progressViewStyle(.linear)
-                    .frame(width: 120)
+                    .frame(width: 88)
                 Text("\(formatBytes(rx)) / \(formatBytes(total))")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
-
-            Spacer()
 
             if case .notProvisioned = vmManager.state {
                 Button("Set Up VM…") { onSetUp?() }
@@ -28,16 +26,20 @@ struct VMStatusBarView: View {
                     .font(.caption)
                     .foregroundStyle(.tint)
             } else if vmManager.state.isRunning {
-                Button("Stop VM") {
-                    Task { await vmManager.stop() }
+                Menu {
+                    Button("Stop VM") {
+                        Task { await vmManager.stop() }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.borderless)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .menuStyle(.borderlessButton)
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 7)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
         .background(.regularMaterial, in: Capsule())
         .overlay(Capsule().strokeBorder(.separator, lineWidth: 0.5))
     }

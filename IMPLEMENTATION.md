@@ -179,11 +179,12 @@ Before VM boot, stages Steam auth data in a virtio-fs share:
 |---|---|
 | `AuthView` | Steam sign-in screen (shown when !isAuthenticated) |
 | `APIKeySetupSheet` | Slide-up for API key entry (shown after first auth) |
-| `LibraryView` | Grid of Steam games with search |
-| `GameDetailView` | Hero art, Play/Stop/Retry buttons, info grid, auto-scrolling log console |
-| `VMGameWindow` | Full-screen sheet with `VZVirtualMachineView` + Stop Game button |
+| `LibraryView` | Full-width game library grid with search/sort in the main window |
+| `GameDetailWindowView` | Dedicated game-detail window opened when a game is selected |
+| `GameDetailView` | Hero art, Play/Stop/Retry buttons, info grid, copyable launch log console |
+| `VMGameWindow` | Full-screen VM display sheet with Stop Game control |
 | `VMDisplayView` | `NSViewRepresentable` wrapping `VZVirtualMachineView`; `updateNSView` re-assigns `virtualMachine` on restart |
-| `VMStatusBarView` | Status pill (dot + label + optional progress bar) |
+| `VMStatusBarView` | Compact floating status pill/menu for VM state and actions |
 | `VMProvisionView` | Sheet for first-time image download |
 | `SettingsView` | CPU/RAM/disk sliders, API key, repo slug, VM credentials |
 

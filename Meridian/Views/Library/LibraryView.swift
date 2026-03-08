@@ -3,6 +3,7 @@ import SwiftUI
 struct LibraryView: View {
     @Environment(SteamLibraryStore.self) private var library
     @Binding var selectedGame: Game?
+    var onActivateGame: ((Game) -> Void)? = nil
 
     private let columns = [
         GridItem(.adaptive(minimum: 180, maximum: 220), spacing: 14)
@@ -70,7 +71,10 @@ struct LibraryView: View {
             LazyVGrid(columns: columns, spacing: 14) {
                 ForEach(library.filteredGames) { game in
                     GameGridView(game: game, isSelected: selectedGame?.id == game.id)
-                        .onTapGesture { selectedGame = game }
+                        .onTapGesture {
+                            selectedGame = game
+                            onActivateGame?(game)
+                        }
                 }
             }
             .padding(16)

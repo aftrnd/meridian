@@ -362,6 +362,17 @@ PINEOF
 
 apt-get update -qq
 
+# Extract minimal amd64 runtime so Rosetta can start x86_64 userland binaries.
+# Use dpkg-deb -x (not apt install) to avoid cross-arch dpkg-divert conflicts.
+mkdir -p /tmp/meridian-amd64-runtime && cd /tmp/meridian-amd64-runtime
+apt-get download -qq \
+    gcc-14-base:amd64 libc6:amd64 libgcc-s1:amd64 libstdc++6:amd64 zlib1g:amd64
+for deb in ./*.deb; do
+    dpkg-deb -x "${deb}" /
+done
+ldconfig || true
+cd /
+
 # Download the canonical Steam installer from Valve's CDN.
 # Using the CDN .deb (not Ubuntu repos) avoids version skew on ARM64.
 wget -q -O /tmp/steam-installer.deb \
@@ -374,6 +385,12 @@ dpkg --force-architecture --force-depends -i /tmp/steam-installer.deb
 # Do NOT run `apt-get -f` here: on arm64+amd64 multiarch it can decide to
 # remove steam-launcher entirely because some amd64 dependency chains are
 # intentionally unresolved in this Rosetta-driven setup.
+
+# Ensure canonical x86_64 loader path exists for Rosetta-translated binaries.
+mkdir -p /lib64
+if [[ -f /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 ]]; then
+    ln -sf /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 /lib64/ld-linux-x86-64.so.2
+fi
 
 # Verify
 dpkg -l steam-launcher | grep "^ii" >/dev/null \

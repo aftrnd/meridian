@@ -9,6 +9,7 @@ struct ContentView: View {
     @State private var selectedGame: Game?
     @State private var columnVisibility = NavigationSplitViewVisibility.all
     @State private var showProvision = false
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         Group {
@@ -45,22 +46,24 @@ struct ContentView: View {
                 set: { library.filter = $0 }
             ))
             .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 220)
-        } content: {
-            LibraryView(selectedGame: $selectedGame)
-                .navigationSplitViewColumnWidth(min: 320, ideal: 380)
         } detail: {
-            if let game = selectedGame {
-                GameDetailView(game: game)
-                    .environment(launcher)
-            } else {
-                LibraryEmptyDetail()
-            }
-        }
-        .overlay(alignment: .bottom) {
-                VMStatusBarView(onSetUp: { showProvision = true })
-                    .padding(.bottom, 8)
+            LibraryView(
+                selectedGame: $selectedGame,
+                onActivateGame: { game in
+                    selectedGame = game
+                    openWindow(id: "game-detail", value: game.id)
+                }
+            )
+                .navigationSplitViewColumnWidth(min: 720, ideal: 980)
+                .safeAreaInset(edge: .bottom) {
+                    HStack {
+                        Spacer()
+                        VMStatusBarView(onSetUp: { showProvision = true })
+                    }
                     .padding(.horizontal, 12)
-            }
+                    .padding(.bottom, 8)
+                }
+        }
     }
 }
 
@@ -115,22 +118,6 @@ private struct SidebarView: View {
         case .installed: return "internaldrive"
         case .windows:   return "cpu"
         }
-    }
-}
-
-// MARK: - Empty detail
-
-private struct LibraryEmptyDetail: View {
-    var body: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "gamecontroller")
-                .font(.system(size: 56, weight: .thin))
-                .foregroundStyle(.quaternary)
-            Text("Select a game to get started")
-                .font(.title3)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
