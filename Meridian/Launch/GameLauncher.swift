@@ -268,25 +268,27 @@ final class GameLauncher {
         launchState = .running(appID: game.id)
         runningSince = .now
         currentActivity = nil
-        appendLog("Game is running")
+        appendLog("Game launched — monitoring Wine processes")
         library?.setInstalled(true, for: game.id)
         log.info("[launch] state=RUNNING appID=\(game.id) | monitoring pid=\(launchedPID)")
 
-        gameProcess.startMonitoring(appID: game.id, launchedPID: launchedPID, engine: engine, prefix: prefix)
-        appendLog("Waiting for game window to appear…")
+        // Forward real-time monitoring status into the in-app log so the user
+        // isn't left guessing. GameProcess calls this on the main actor.
+        gameProcess.startMonitoring(
+            appID: game.id,
+            launchedPID: launchedPID,
+            engine: engine,
+            prefix: prefix,
+            onLog: { [weak self] line in self?.appendLog(line) }
+        )
 
-        var monitorConfirmed = false
         while gameProcess.isRunning {
             if Task.isCancelled {
                 log.info("[launch] task cancelled during monitoring — stopping game")
                 await gameProcess.stopGame(engine: engine, prefix: prefix)
                 break
             }
-            if gameProcess.confirmedRunning && !monitorConfirmed {
-                monitorConfirmed = true
-                appendLog("Game confirmed running")
-            }
-            try? await Task.sleep(for: .seconds(2))
+            try? await Task.sleep(for: .seconds(1))
         }
 
         guard !Task.isCancelled else {

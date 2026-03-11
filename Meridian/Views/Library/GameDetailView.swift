@@ -542,7 +542,9 @@ private struct StatusCard: View {
                     : "Installing via Steam — download in progress"
             }
             let elapsed = launcher.runningSince.map { date.timeIntervalSince($0) } ?? 0
-            return elapsed > 25
+            // Grace period is 5s; if we still haven't confirmed by ~10s something
+            // is taking longer than usual (e.g. slow first Steam login).
+            return elapsed > 10
                 ? "Steam is loading — game window opening soon…"
                 : "Opening game window…"
         case .stopping:
