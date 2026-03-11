@@ -1,5 +1,8 @@
 import Observation
 import Foundation
+import os.log
+
+private let log = Logger(subsystem: "com.meridian.app", category: "SteamLibrary")
 
 /// Owns the fetched game list and drives search/filter/sort.
 @Observable
@@ -46,11 +49,16 @@ final class SteamLibraryStore {
     // MARK: - Fetch
 
     func refresh(steamID: String, apiKey: String) async {
-        guard !isLoading, !steamID.isEmpty else { return }
+        guard !isLoading, !steamID.isEmpty else {
+            log.debug("[refresh] skipped: isLoading=\(self.isLoading) steamID.isEmpty=\(steamID.isEmpty)")
+            return
+        }
         guard !apiKey.isEmpty else {
+            log.warning("[refresh] no API key configured")
             loadError = "Steam Web API key not configured. Add it in Settings."
             return
         }
+        log.info("[refresh] starting for steamID=\(steamID)")
         isLoading = true
         loadError = nil
         defer { isLoading = false }
@@ -62,12 +70,15 @@ final class SteamLibraryStore {
             games = applyInstallCache(to: ownedGames)
             recentGames = applyInstallCache(to: recentlyPlayed)
             lastRefreshed = .now
+            log.info("[refresh] complete: \(ownedGames.count) owned, \(recentlyPlayed.count) recent")
         } catch {
             loadError = error.localizedDescription
+            log.error("[refresh] failed: \(error.localizedDescription)")
         }
     }
 
     func setInstalled(_ installed: Bool, for appID: Int) {
+        log.info("[setInstalled] appID=\(appID) installed=\(installed)")
         if installed {
             settings.markInstalled(appID: appID)
         } else {

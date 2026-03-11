@@ -47,9 +47,12 @@ final class GameLauncher {
         library: SteamLibraryStore? = nil
     ) {
         switch launchState {
-        case .preparingEngine, .preparingPrefix, .bootstrappingSteam, .launching, .running:
+        case .preparingEngine, .preparingPrefix, .bootstrappingSteam, .launching:
             log.warning("[launch] ignoring — already in state \(String(describing: self.launchState))")
             return
+        case .running:
+            log.info("[launch] currently in .running — stopping previous session before re-launch")
+            gameProcess.stopGame(engine: engine, prefix: prefix)
         case .idle, .exited, .failed:
             break
         }
@@ -197,7 +200,10 @@ final class GameLauncher {
             appendLog("[5/6] No macOS Steam session found — manual login may be required")
         }
 
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled else {
+            log.info("[launch] cancelled before step 6")
+            return
+        }
 
         // 6. Launch game directly via steam.exe -applaunch.
         //    Steam handles its own initialization, login, and game launch
@@ -206,13 +212,15 @@ final class GameLauncher {
         transition(to: .launching, activity: "Launching \(game.name) — sign into Steam if prompted...")
         appendLog("[6/6] Launching steam.exe -applaunch \(game.id)")
 
+        let launchedPID: Int32
         do {
-            try await steamManager.launchGame(
+            launchedPID = try await steamManager.launchGame(
                 appID: game.id,
                 engine: engine,
                 prefix: prefix
             )
-            appendLog("[6/6] Launch dispatched")
+            appendLog("[6/6] Launch dispatched (pid=\(launchedPID))")
+            log.info("[launch] wine process pid=\(launchedPID)")
         } catch {
             fail("Launch failed: \(error.localizedDescription)", error: error)
             await cleanupProcesses(engine: engine, steamManager: steamManager)
@@ -224,16 +232,22 @@ final class GameLauncher {
         currentActivity = nil
         appendLog("Game is running")
         library?.setInstalled(true, for: game.id)
-        log.info("[launch] state=RUNNING appID=\(game.id)")
+        log.info("[launch] state=RUNNING appID=\(game.id) | monitoring pid=\(launchedPID)")
 
-        gameProcess.startMonitoring(appID: game.id, engine: engine, prefix: prefix)
+        gameProcess.startMonitoring(appID: game.id, launchedPID: launchedPID, engine: engine, prefix: prefix)
 
         while gameProcess.isRunning {
             if Task.isCancelled {
+                log.info("[launch] task cancelled during monitoring — stopping game")
                 gameProcess.stopGame(engine: engine, prefix: prefix)
                 break
             }
             try? await Task.sleep(for: .seconds(2))
+        }
+
+        guard !Task.isCancelled else {
+            log.info("[launch] task cancelled — not setting exited state")
+            return
         }
 
         appendLog("Game session ended")

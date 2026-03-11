@@ -30,7 +30,7 @@ struct GameGridView: View {
     }
 
     private var artSection: some View {
-        AsyncImage(url: game.capsuleURL) { phase in
+        CachedAsyncImage(url: game.capsuleURL) { phase in
             switch phase {
             case .success(let image):
                 image
@@ -63,10 +63,12 @@ struct GameGridView: View {
     private var infoRow: some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(game.name)
-                .font(.caption)
+                .font(.footnote)
                 .fontWeight(.medium)
                 .lineLimit(2)
-                .fixedSize(horizontal: false, vertical: true)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, minHeight: 34, alignment: .topLeading)
+                .help(game.name)
 
             HStack(spacing: 6) {
                 Text(game.playtimeFormatted)

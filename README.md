@@ -1,21 +1,21 @@
 # Meridian
 
-Native macOS app for running Windows Steam games through Wine + GPTK (Game Porting Toolkit).
+Native macOS app for running Windows Steam games through Wine + DXMT (Direct3D to Metal).
 
 ## How It Works
 
 1. **Sign in with Steam** via OpenID (`ASWebAuthenticationSession`), no Steam password stored by Meridian.
 2. **Fetch library metadata** from Steam Web API (`IPlayerService/GetOwnedGames`).
-3. **Launch games through Wine** — DirectX calls are translated to Metal via D3DMetal (Apple GPTK).
-4. **Steam runs silently** in the background inside a Wine prefix. Session files are copied from macOS Steam for auto-login.
-5. **Games render natively** through Metal — no VM, no virtual display, just native macOS windows.
+3. **Launch games through Wine** — DirectX calls are translated to Metal via DXMT.
+4. **Steam runs silently** in the background inside a Wine prefix. User authenticates once through the Steam window, then all future launches are automatic (JWT cached for months).
+5. **Games render natively** through Metal — no VM, no virtual display.
 
 ## Architecture
 
 ```
 MeridianApp (SwiftUI)
 ├── Steam/           — OpenID auth, Web API, library sync, session bridge
-├── Engine/          — Wine+GPTK runtime management, prefix management, Steam lifecycle
+├── Engine/          — Wine detection, prefix management, Steam lifecycle
 ├── Launch/          — Game launch orchestration
 ├── Models/          — Game, AppSettings, PlayerSummary, AppDetails
 └── Views/           — Library, game detail, settings, auth, engine setup
@@ -25,56 +25,80 @@ MeridianApp (SwiftUI)
 
 ```
 Windows Game (.exe)
-    → Wine (Win32 API translation)
-        → GPTK / D3DMetal (DirectX → Metal)
+    → Wine 11 (Win32 API translation)
+        → DXMT (DirectX 11 → Metal, direct path)
             → Metal GPU (native rendering)
 ```
 
-No VM. No guest OS. No virtio. Games run as macOS processes.
+## Wine Backend
+
+Meridian detects and uses CrossOver's Wine binary (wine-11.0 with DXMT, DXVK, MoltenVK). Detection order:
+
+1. `/Applications/CrossOver.app/` — CrossOver 26+ (recommended)
+2. `~/Library/Application Support/com.meridian.app/engine/` — bundled fallback
+
+### Why CrossOver's Wine?
+
+CrossOver uses **wine-11.0** (2026). The open-source Gcenx builds use wine-8.0.1 (2024), which can't render Steam's Chromium-based UI. The difference is 2 years of upstream Wine patches.
+
+### All Components Are Open Source
+
+| Component | License | Source |
+|-----------|---------|--------|
+| Wine 11 | LGPL | [winehq.org](https://www.winehq.org/) |
+| DXMT | Open source | [github.com/nicbarker/dxmt](https://github.com/nicbarker/dxmt) |
+| DXVK | Zlib | [github.com/doitsujin/dxvk](https://github.com/doitsujin/dxvk) |
+| MoltenVK | Apache 2.0 | [github.com/KhronosGroup/MoltenVK](https://github.com/KhronosGroup/MoltenVK) |
+
+### Building Your Own Wine (Independence Path)
+
+To remove the CrossOver dependency, build Wine 11+ from source:
+
+```bash
+# 1. Build Wine 11 from source (CrossOver's fork is at github.com/nicbarker/wine)
+git clone https://github.com/nicbarker/wine.git
+cd wine && ./configure --enable-archs=i386,x86_64 && make
+
+# 2. Build DXMT (DirectX → Metal)
+git clone https://github.com/nicbarker/dxmt.git
+cd dxmt && meson build && ninja -C build
+
+# 3. Build MoltenVK
+git clone https://github.com/KhronosGroup/MoltenVK.git
+cd MoltenVK && ./fetchDependencies --macos && make macos
+
+# 4. Package into engine/ directory matching Meridian's expected layout
+```
 
 ## Game Launch Flow
 
 1. User clicks **Play** in the library
-2. Meridian verifies Wine+GPTK runtime is installed
+2. Meridian detects Wine backend (CrossOver or bundled)
 3. Creates or reuses Wine prefix (`~/Library/Application Support/com.meridian.app/bottles/steam/`)
-4. Copies macOS Steam session files for auto-login (if Steam for Mac is installed)
-5. Starts `steam.exe -silent` in Wine (background, no visible window)
-6. Waits for Steam IPC readiness
-7. Launches game via `steam://rungameid/<APPID>` protocol
-8. Game window appears as a native macOS window
-9. Game exits → returns to library
+4. Bootstraps Steam client if first run (downloads steamui.dll)
+5. Copies macOS Steam session files for account hint
+6. Launches `steam.exe -silent -applaunch <APPID>` through Wine
+7. DXMT translates DirectX → Metal for game rendering
+8. Monitors Wine processes for game exit
 
 ## Requirements
 
 - macOS 15+ (macOS 26 recommended)
 - Apple Silicon Mac
-- Xcode 16+ / Swift 6
+- [CrossOver](https://www.codeweavers.com/crossover) installed (or custom Wine 11+ build)
 - Steam Web API key: [steamcommunity.com/dev/apikey](https://steamcommunity.com/dev/apikey)
 
 ## First-Time Setup
 
-1. Open `Meridian.xcodeproj` in Xcode.
-2. Set your Team in Signing & Capabilities.
-3. Build and run.
-4. Sign in with Steam and provide your API key.
-5. Click **Set Up Engine** when prompted to download the Wine+GPTK runtime (~2–3 GB).
-6. Click **Play** on any game — Steam installs into the Wine prefix automatically.
-
-## Engine Runtime
-
-The Wine+GPTK runtime is downloaded from GitHub releases and stored at:
-
-```
-~/Library/Application Support/com.meridian.app/engine/
-├── wine/bin/wine64        — Wine binary
-└── lib/                   — D3DMetal, DXVK, system libraries
-```
-
-The GitHub repo slug is configurable in Settings (default: `aftrnd/meridian`).
+1. Install CrossOver from [codeweavers.com](https://www.codeweavers.com/crossover)
+2. Open `Meridian.xcodeproj` in Xcode, set your Team, build and run
+3. Sign in with Steam and provide your API key
+4. Click **Play** on any game — Steam will prompt for login on first launch
+5. After authenticating once, all future launches are silent
 
 ## Wine Prefix
 
-A single shared Wine prefix is used for Steam and all games:
+Single shared prefix for Steam and all games:
 
 ```
 ~/Library/Application Support/com.meridian.app/bottles/steam/
@@ -84,30 +108,17 @@ A single shared Wine prefix is used for Steam and all games:
 └── user.reg               — User registry
 ```
 
-## Steam Session
-
-Meridian copies session files from macOS Steam (`~/Library/Application Support/Steam/`) into the Wine prefix to enable auto-login:
-
-- `config/loginusers.vdf` — logged-in user
-- `config/config.vdf` — auth tokens
-- `registry.vdf` — Steam settings
-- `ssfn*` — machine auth tokens
-
-If macOS Steam is not installed, the user signs into Steam once inside the Wine window. Steam remembers credentials for all subsequent launches.
-
 ## Known Limitations
 
-- **Anti-cheat**: EasyAntiCheat and BattlEye block Wine/GPTK on macOS. Most competitive online games will not work.
-- **Denuvo DRM**: Poor compatibility under Wine. Many Denuvo-protected titles will fail.
-- **First Steam login**: Steam Guard may require one-time email/authenticator verification even with session copy.
-- **Performance**: Translation overhead exists. Most games run well on M-series Macs, but heavy DX12/ray-tracing titles may struggle.
-- **Not all games work**: Compatibility varies by game. This is inherent to Wine/GPTK translation.
+- **Anti-cheat**: EasyAntiCheat and BattlEye block Wine on macOS
+- **Denuvo DRM**: Poor compatibility under Wine
+- **First login**: Requires one-time Steam authentication through the Wine window
+- **Per-game tuning**: Some games need specific DLL overrides or renderer settings
+- **Rendering**: DXMT handles most DX11 games well; some titles may have visual artifacts
 
 ## Settings
 
 | Setting | Description |
 |---------|-------------|
-| Engine Repo Slug | GitHub repo for Wine+GPTK releases |
 | Metal HUD | Show GPU performance overlay |
 | Virtual Desktop | Force fixed-resolution Wine desktop |
-| Steam Web API Key | Required for library sync |

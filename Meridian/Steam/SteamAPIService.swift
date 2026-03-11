@@ -1,4 +1,7 @@
 import Foundation
+import os.log
+
+private let log = Logger(subsystem: "com.meridian.app", category: "SteamAPI")
 
 /// Direct Steam Web API client.
 ///
@@ -23,14 +26,17 @@ actor SteamAPIService {
 
     /// Fetches the public profile for a given Steam64 ID.
     func fetchPlayerSummary(steamID: String, apiKey: String) async throws -> PlayerSummary {
+        log.info("[fetchPlayerSummary] steamID=\(steamID)")
         let url = try buildURL(
             path: "/ISteamUser/GetPlayerSummaries/v2/",
             params: ["key": apiKey, "steamids": steamID]
         )
         let envelope: PlayerSummariesEnvelope = try await get(url)
         guard let player = envelope.response.players.first else {
+            log.error("[fetchPlayerSummary] no player found for steamID=\(steamID)")
             throw APIError.notFound("Player \(steamID)")
         }
+        log.info("[fetchPlayerSummary] found: \(player.personaName)")
         return player
     }
 
@@ -38,6 +44,7 @@ actor SteamAPIService {
 
     /// Returns the full owned game list including playtime.
     func fetchOwnedGames(steamID: String, apiKey: String) async throws -> [Game] {
+        log.info("[fetchOwnedGames] steamID=\(steamID)")
         let url = try buildURL(
             path: "/IPlayerService/GetOwnedGames/v1/",
             params: [
@@ -48,11 +55,14 @@ actor SteamAPIService {
             ]
         )
         let envelope: OwnedGamesEnvelope = try await get(url)
-        return (envelope.response.games ?? []).map { Game(from: $0) }
+        let games = (envelope.response.games ?? []).map { Game(from: $0) }
+        log.info("[fetchOwnedGames] returned \(games.count) games")
+        return games
     }
 
     /// Returns recently played games (last 2 weeks).
     func fetchRecentlyPlayed(steamID: String, apiKey: String, count: Int = 10) async throws -> [Game] {
+        log.info("[fetchRecentlyPlayed] steamID=\(steamID) count=\(count)")
         let url = try buildURL(
             path: "/IPlayerService/GetRecentlyPlayedGames/v1/",
             params: [
@@ -62,20 +72,26 @@ actor SteamAPIService {
             ]
         )
         let envelope: RecentlyPlayedEnvelope = try await get(url)
-        return (envelope.response.games ?? []).map { Game(from: $0) }
+        let games = (envelope.response.games ?? []).map { Game(from: $0) }
+        log.info("[fetchRecentlyPlayed] returned \(games.count) games")
+        return games
     }
 
     // MARK: - App details (no key required — public Store API)
 
     /// Fetches store metadata for a single appID.
     func fetchAppDetails(appID: Int) async throws -> AppDetails {
+        log.info("[fetchAppDetails] appID=\(appID)")
         guard let url = URL(string: "https://store.steampowered.com/api/appdetails?appids=\(appID)&filters=basic,categories,genres") else {
+            log.error("[fetchAppDetails] bad URL for appID=\(appID)")
             throw APIError.badURL
         }
         let raw: [String: AppDetailsWrapper] = try await get(url)
         guard let wrapper = raw[String(appID)], wrapper.success, let data = wrapper.data else {
+            log.error("[fetchAppDetails] no data for appID=\(appID) (success=\(raw[String(appID)]?.success ?? false))")
             throw APIError.notFound("App \(appID)")
         }
+        log.info("[fetchAppDetails] appID=\(appID) name=\(data.name ?? "unknown")")
         return data
     }
 
@@ -91,12 +107,24 @@ actor SteamAPIService {
     }
 
     private func get<T: Decodable>(_ url: URL) async throws -> T {
+        log.debug("[get] \(url.path())")
         let (data, response) = try await session.data(from: url)
-        guard let http = response as? HTTPURLResponse else { throw APIError.badResponse }
+        guard let http = response as? HTTPURLResponse else {
+            log.error("[get] non-HTTP response for \(url.path())")
+            throw APIError.badResponse
+        }
+        log.debug("[get] HTTP \(http.statusCode) | \(data.count) bytes | \(url.path())")
         guard (200..<300).contains(http.statusCode) else {
+            log.error("[get] HTTP \(http.statusCode) for \(url.path())")
             throw APIError.httpError(http.statusCode)
         }
-        return try JSONDecoder().decode(T.self, from: data)
+        do {
+            return try JSONDecoder().decode(T.self, from: data)
+        } catch {
+            log.error("[get] decode failed for \(url.path()): \(error.localizedDescription)")
+            log.debug("[get] raw response: \(String(data: data.prefix(1000), encoding: .utf8) ?? "<binary>")")
+            throw error
+        }
     }
 
     // MARK: - Errors

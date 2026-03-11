@@ -1,6 +1,9 @@
 import AuthenticationServices
 import Security
 import Observation
+import os.log
+
+private let log = Logger(subsystem: "com.meridian.app", category: "SteamAuth")
 
 /// Handles Steam OpenID authentication via ASWebAuthenticationSession.
 ///
@@ -108,7 +111,11 @@ final class SteamAuthService: NSObject {
     /// This is the RFC 8252 §7.3 "loopback interface" pattern used by VS Code,
     /// Spotify, and other native desktop apps for OAuth/OpenID flows.
     func signIn() async {
-        guard !isAuthenticating else { return }
+        guard !isAuthenticating else {
+            log.warning("[signIn] already authenticating — ignoring")
+            return
+        }
+        log.info("[signIn] starting Steam OpenID sign-in")
         isAuthenticating = true
         authError = nil
         defer {
@@ -170,21 +177,21 @@ final class SteamAuthService: NSObject {
             try await handleCallback(callbackURL)
 
         } catch ASWebAuthenticationSessionError.canceledLogin {
-            // User dismissed the sheet — not an error.
+            log.info("[signIn] user cancelled sign-in")
         } catch {
+            log.error("[signIn] failed: \(error.localizedDescription)")
             authError = error.localizedDescription
         }
     }
 
     func signOut() {
+        log.info("[signOut] signing out steamID=\(self.steamID)")
         isAuthenticated = false
         steamID = ""
         displayName = ""
         avatarURL = nil
         deleteSecret(key: KeychainKey.steamID)
         apiKeyPromptDismissed = false
-        // Intentionally preserve apiKey across sign-out
-        // so users don't have to re-enter them if they sign back in.
     }
 
     // MARK: - Private helpers
@@ -214,8 +221,7 @@ final class SteamAuthService: NSObject {
     }
 
     private func handleCallback(_ url: URL) async throws {
-        // Our localhost server issues a redirect to:
-        //   meridian://auth/callback?steamid=<steamID64>
+        log.info("[handleCallback] url=\(url.absoluteString)")
         let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
 
         guard
@@ -223,18 +229,20 @@ final class SteamAuthService: NSObject {
             id.count >= 17,
             id.allSatisfy(\.isNumber)
         else {
+            log.error("[handleCallback] invalid callback — no valid steamid in URL")
             throw AuthError.invalidCallback
         }
 
         let extractedID = id
+        log.info("[handleCallback] extracted steamID=\(extractedID)")
 
         steamID = extractedID
         saveSecret(extractedID, key: KeychainKey.steamID)
 
-        // Fetch display name + avatar if we already have an API key stored.
         await refreshProfile(steamID: extractedID)
 
         isAuthenticated = true
+        log.info("[handleCallback] sign-in complete ✓")
     }
 
     /// Fetches the player profile and updates displayName / avatarURL.
@@ -242,19 +250,29 @@ final class SteamAuthService: NSObject {
     func refreshProfile(steamID: String) async {
         let key = apiKey
         guard !key.isEmpty else {
+            log.debug("[refreshProfile] no API key — skipping profile fetch")
             displayName = displayName.isEmpty ? "Steam User" : displayName
             return
         }
-        if let summary = try? await SteamAPIService.shared.fetchPlayerSummary(
-            steamID: steamID, apiKey: key
-        ) {
+        log.info("[refreshProfile] fetching profile for steamID=\(steamID)")
+        do {
+            let summary = try await SteamAPIService.shared.fetchPlayerSummary(
+                steamID: steamID, apiKey: key
+            )
             displayName = summary.personaName
             avatarURL   = URL(string: summary.avatarFull)
+            log.info("[refreshProfile] got displayName=\(summary.personaName)")
+        } catch {
+            log.error("[refreshProfile] failed: \(error.localizedDescription)")
         }
     }
 
     private func restoreSession() {
-        guard let savedID = loadSecret(key: KeychainKey.steamID), !savedID.isEmpty else { return }
+        guard let savedID = loadSecret(key: KeychainKey.steamID), !savedID.isEmpty else {
+            log.info("[restoreSession] no saved session")
+            return
+        }
+        log.info("[restoreSession] restored steamID=\(savedID)")
         steamID = savedID
         isAuthenticated = true
         Task {

@@ -18,6 +18,6 @@ DerivedData/
 *.swp
 *~
 
-# Meridian runtime (downloaded at runtime, not checked in)
-engine/
-bottles/
+# Meridian runtime data (downloaded at runtime, not checked in)
+/engine/
+/bottles/

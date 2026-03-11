@@ -45,60 +45,60 @@ struct GameDetailView: View {
                 }
             }
         } message: {
-            Text("This will delete the Wine prefix, Steam installation, and all downloaded game files. The Wine engine runtime will be kept. On next launch, everything will be set up fresh.")
+            Text("This will delete the Wine prefix, Steam installation, and all downloaded game files. On next launch, everything will be set up fresh.")
         }
     }
 
     // MARK: - Hero
 
     private var heroSection: some View {
-        heroImage
-            .frame(maxWidth: .infinity)
-            .frame(height: 240)
-            .clipped()
-            .overlay(alignment: .bottom) {
-                LinearGradient(
-                    colors: [.clear, .black.opacity(0.6)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .frame(height: 110)
-                .allowsHitTesting(false)
-            }
-            .overlay(alignment: .bottom) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(currentGame.name)
-                        .font(.title)
-                        .fontWeight(.bold)
-                        .foregroundStyle(.white)
-                        .lineLimit(2)
-                        .shadow(color: .black.opacity(0.25), radius: 4, x: 0, y: 1)
+        ZStack(alignment: .bottomLeading) {
+            heroImage
+                .frame(maxWidth: .infinity)
+                .frame(height: 240)
+                .clipped()
 
-                    HStack(spacing: 8) {
-                        if currentGame.playtimeMinutes > 0 {
-                            Text(currentGame.playtimeFormatted + " played")
-                                .font(.subheadline)
-                                .foregroundStyle(.white.opacity(0.8))
-                        }
-                        if currentGame.windowsOnly {
-                            WindowsBadge()
-                        }
+            LinearGradient(
+                colors: [.clear, .black.opacity(0.65)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: 120)
+            .frame(maxWidth: .infinity)
+            .allowsHitTesting(false)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(currentGame.name)
+                    .font(.title)
+                    .fontWeight(.bold)
+                    .foregroundStyle(.white)
+                    .lineLimit(2)
+                    .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 1)
+
+                HStack(spacing: 8) {
+                    if currentGame.playtimeMinutes > 0 {
+                        Text(currentGame.playtimeFormatted + " played")
+                            .font(.subheadline)
+                            .foregroundStyle(.white.opacity(0.8))
+                    }
+                    if currentGame.windowsOnly {
+                        WindowsBadge()
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 20)
-                .padding(.bottom, 16)
             }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 16)
+        }
     }
 
     @ViewBuilder
     private var heroImage: some View {
-        AsyncImage(url: game.heroURL) { heroPhase in
+        CachedAsyncImage(url: game.heroURL) { heroPhase in
             switch heroPhase {
             case .success(let image):
                 image.resizable().aspectRatio(contentMode: .fill)
             default:
-                AsyncImage(url: game.capsuleURL) { capsulePhase in
+                CachedAsyncImage(url: game.capsuleURL) { capsulePhase in
                     switch capsulePhase {
                     case .success(let image):
                         image.resizable().aspectRatio(contentMode: .fill)
@@ -137,7 +137,7 @@ struct GameDetailView: View {
                 Spacer()
             }
             if isActivePhase {
-                ActivityCard(launcher: launcher, openWindow: openWindow)
+                StatusCard(launcher: launcher, openWindow: openWindow)
             }
         }
     }
@@ -145,15 +145,6 @@ struct GameDetailView: View {
     private var isActivePhase: Bool {
         switch launcher.launchState {
         case .preparingEngine, .preparingPrefix, .bootstrappingSteam, .launching, .running:
-            return true
-        default:
-            return false
-        }
-    }
-
-    private var isInProgress: Bool {
-        switch launcher.launchState {
-        case .preparingEngine, .preparingPrefix, .bootstrappingSteam, .launching:
             return true
         default:
             return false
@@ -332,61 +323,47 @@ private struct ProgressButton: View {
     }
 }
 
-// MARK: - Activity Card
+// MARK: - Status Card (user-friendly, no raw logs)
 
-private struct ActivityCard: View {
+private struct StatusCard: View {
     let launcher: GameLauncher
     let openWindow: OpenWindowAction
 
     @State private var elapsed: TimeInterval = 0
     @State private var timer: Timer?
 
-    private var recentLogs: [String] {
-        launcher.logs.suffix(3).map { $0 }
-    }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
+        HStack(spacing: 10) {
+            if !isRunningState {
                 ProgressView()
                     .scaleEffect(0.7)
                     .frame(width: 16, height: 16)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(launcher.currentActivity ?? "Working…")
-                        .font(.subheadline)
-                        .foregroundStyle(.primary)
-                    if elapsed > 5 {
-                        Text(elapsedLabel)
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                            .monospacedDigit()
-                    }
-                }
-                Spacer()
-                Button {
-                    openWindow(id: "launch-log")
-                } label: {
-                    Label("Logs", systemImage: "terminal")
-                        .font(.caption)
-                        .labelStyle(.titleAndIcon)
-                }
-                .buttonStyle(.borderless)
-                .foregroundStyle(.secondary)
             }
 
-            if !recentLogs.isEmpty {
-                Divider()
-                VStack(alignment: .leading, spacing: 3) {
-                    ForEach(Array(recentLogs.enumerated()), id: \.offset) { _, line in
-                        Text(line)
-                            .font(.system(.caption2, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(statusMessage)
+                    .font(.subheadline)
+                    .foregroundStyle(.primary)
+
+                if elapsed > 5 {
+                    Text(elapsedLabel)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .monospacedDigit()
                 }
             }
+
+            Spacer()
+
+            Button {
+                openWindow(id: "launch-log")
+            } label: {
+                Image(systemName: "terminal")
+                    .font(.caption)
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.tertiary)
+            .help("View detailed launch logs")
         }
         .padding(12)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
@@ -395,10 +372,30 @@ private struct ActivityCard: View {
         .onDisappear { stopTimer() }
     }
 
+    private var isRunningState: Bool {
+        if case .running = launcher.launchState { return true }
+        return false
+    }
+
+    private var statusMessage: String {
+        switch launcher.launchState {
+        case .preparingEngine, .preparingPrefix:
+            return "Setting up..."
+        case .bootstrappingSteam:
+            return "Updating Steam — first launch takes a few minutes"
+        case .launching:
+            return "Starting game — this may take a moment"
+        case .running:
+            return "Game is running"
+        default:
+            return launcher.currentActivity ?? "Working..."
+        }
+    }
+
     private var elapsedLabel: String {
         let mins = Int(elapsed) / 60
         let secs = Int(elapsed) % 60
-        return mins > 0 ? "\(mins)m \(secs)s elapsed" : "\(secs)s elapsed"
+        return mins > 0 ? "\(mins)m \(secs)s" : "\(secs)s"
     }
 
     private func startTimer() {
