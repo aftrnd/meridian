@@ -130,11 +130,17 @@ private struct SteamSettingsTab: View {
 private struct EngineSettingsTab: View {
     @Environment(WineEngine.self) private var engine
     private let settings = AppSettings.shared
+    @State private var showAdvanced = false
 
     var body: some View {
         Form {
-            Section("Runtime") {
+            Section {
                 EngineStatusRow(engine: engine)
+            } header: {
+                Text("Runtime")
+            } footer: {
+                Text("Open-source components: Wine (LGPL), DXMT, MoltenVK. No third-party apps required.")
+                    .font(.caption)
             }
 
             Section("Display") {
@@ -170,15 +176,20 @@ private struct EngineSettingsTab: View {
                 }
             }
 
-            Section("Advanced") {
-                TextField("Engine repo slug", text: Binding(
-                    get: { settings.engineRepoSlug },
-                    set: { settings.engineRepoSlug = $0 }
-                ))
-                .textFieldStyle(.roundedBorder)
-                Text("Format: owner/repo. GitHub repository for Wine+GPTK runtime releases.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            Section {
+                DisclosureGroup("Advanced", isExpanded: $showAdvanced) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        TextField("Engine repo slug", text: Binding(
+                            get: { settings.engineRepoSlug },
+                            set: { settings.engineRepoSlug = $0 }
+                        ))
+                        .textFieldStyle(.roundedBorder)
+                        Text("Format: owner/repo. GitHub repository for Wine runtime releases.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.top, 4)
+                }
             }
         }
         .formStyle(.grouped)
@@ -189,28 +200,41 @@ private struct EngineSettingsTab: View {
 
 private struct EngineStatusRow: View {
     let engine: WineEngine
+    @State private var showSetup = false
 
     var body: some View {
         HStack {
             VStack(alignment: .leading, spacing: 3) {
-                Text(engine.isReady ? "Wine Runtime" : "Not detected")
+                Text(engine.isReady ? "Wine Runtime" : "Not installed")
                     .fontWeight(.medium)
                 if engine.isReady {
                     Text("Backend: \(engine.backendName)")
                         .font(.caption)
                         .foregroundStyle(.green)
                 } else {
-                    Text("Install CrossOver from codeweavers.com")
+                    Text("Download the open-source Wine engine to play games.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
             Spacer()
-            Button("Re-detect") {
-                engine.detect()
+            if engine.isReady {
+                Button("Re-detect") {
+                    engine.detect()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            } else {
+                Button("Download…") {
+                    showSetup = true
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
+        }
+        .sheet(isPresented: $showSetup) {
+            EngineSetupView()
+                .environment(engine)
         }
     }
 }

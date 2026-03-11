@@ -25,6 +25,27 @@ struct Game: Identifiable, Hashable, Sendable {
         URL(string: "https://cdn.akamai.steamstatic.com/steam/apps/\(id)/library_hero.jpg")!
     }
 
+    /// Fallback CDN URLs tried in order when the primary Akamai URL fails or returns non-200.
+    var capsuleURLFallbacks: [URL] {
+        [
+            URL(string: "https://cdn.cloudflare.steamstatic.com/steam/apps/\(id)/header.jpg"),
+            URL(string: "https://steamcdn-a.akamaihd.net/steam/apps/\(id)/header.jpg"),
+            // Some games don't have header.jpg — try the wider capsule format
+            URL(string: "https://cdn.akamai.steamstatic.com/steam/apps/\(id)/capsule_616x353.jpg"),
+            URL(string: "https://cdn.cloudflare.steamstatic.com/steam/apps/\(id)/capsule_616x353.jpg"),
+        ].compactMap { $0 }
+    }
+
+    var heroURLFallbacks: [URL] {
+        [
+            URL(string: "https://cdn.cloudflare.steamstatic.com/steam/apps/\(id)/library_hero.jpg"),
+            URL(string: "https://steamcdn-a.akamaihd.net/steam/apps/\(id)/library_hero.jpg"),
+            // If no hero, fall through to capsule as a last resort
+            URL(string: "https://cdn.akamai.steamstatic.com/steam/apps/\(id)/header.jpg"),
+            URL(string: "https://cdn.cloudflare.steamstatic.com/steam/apps/\(id)/header.jpg"),
+        ].compactMap { $0 }
+    }
+
     var playtimeFormatted: String {
         let hours = playtimeMinutes / 60
         if hours == 0 { return "< 1 hr" }

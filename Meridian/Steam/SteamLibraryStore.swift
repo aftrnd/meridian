@@ -106,6 +106,24 @@ final class SteamLibraryStore {
         }
     }
 
+    /// Returns a game with playtime2WeekMinutes merged from recentGames when available.
+    /// GetOwnedGames often returns 0 for playtime_2weeks; GetRecentlyPlayedGames has the real data.
+    func gameWithMergedPlaytime(appID: Int) -> Game? {
+        guard let base = games.first(where: { $0.id == appID }) else { return nil }
+        guard let recent = recentGames.first(where: { $0.id == appID }),
+              let twoWeek = recent.playtime2WeekMinutes, twoWeek > 0
+        else { return base }
+        return Game(
+            id: base.id,
+            name: base.name,
+            playtimeMinutes: base.playtimeMinutes,
+            playtime2WeekMinutes: twoWeek,
+            iconHash: base.iconHash,
+            isInstalled: base.isInstalled,
+            windowsOnly: base.windowsOnly
+        )
+    }
+
     // MARK: - Filter / sort types
 
     enum SortOrder: String, CaseIterable, Identifiable {

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct LibraryView: View {
     @Environment(SteamLibraryStore.self) private var library
+    @Environment(GameLauncher.self)      private var launcher
     @Binding var selectedGame: Game?
 
     @State private var isSearching = false
@@ -72,7 +73,15 @@ struct LibraryView: View {
         ScrollView {
             LazyVGrid(columns: columns, spacing: 14) {
                 ForEach(library.filteredGames) { game in
-                    GameGridView(game: game, isSelected: selectedGame?.id == game.id, isFavorite: library.isFavorite(appID: game.id))
+                    GameGridView(
+                        game: game,
+                        isSelected: selectedGame?.id == game.id,
+                        isFavorite: library.isFavorite(appID: game.id),
+                        isRunning: launcher.activeAppID == game.id && {
+                            if case .running = launcher.launchState { return true }
+                            return false
+                        }()
+                    )
                         .onTapGesture { selectedGame = game }
                         .contextMenu {
                             Button {
