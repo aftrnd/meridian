@@ -14,18 +14,11 @@
 		B0010012 /* SteamLibraryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0010013 /* SteamLibraryStore.swift */; };
 		B0010014 /* Game.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0010015 /* Game.swift */; };
 		B0010016 /* PlayerSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0010017 /* PlayerSummary.swift */; };
-		B0010018 /* VMState.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0010019 /* VMState.swift */; };
-		B001001A /* VMManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B001001B /* VMManager.swift */; };
-		B001001C /* VMConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = B001001D /* VMConfiguration.swift */; };
-		B001001E /* VMImageProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = B001001F /* VMImageProvider.swift */; };
-		B0010020 /* ProtonBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0010021 /* ProtonBridge.swift */; };
 		B0010022 /* GameLauncher.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0010023 /* GameLauncher.swift */; };
 		B0010024 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0010025 /* ContentView.swift */; };
 		B0010026 /* LibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0010027 /* LibraryView.swift */; };
 		B0010028 /* GameGridView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0010029 /* GameGridView.swift */; };
 		B001002A /* GameDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B001002B /* GameDetailView.swift */; };
-		B001002C /* VMStatusBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B001002D /* VMStatusBarView.swift */; };
-		B001002E /* VMProvisionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B001002F /* VMProvisionView.swift */; };
 		B0010030 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0010031 /* SettingsView.swift */; };
 		B0010032 /* AuthView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0010033 /* AuthView.swift */; };
 		B0010034 /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0010035 /* AppSettings.swift */; };
@@ -33,6 +26,11 @@
 		B0010036 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B0010037 /* Assets.xcassets */; };
 		B0010038 /* SteamSessionBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = B001003D /* SteamSessionBridge.swift */; };
 		B001003E /* SteamLocalAuthServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B001003F /* SteamLocalAuthServer.swift */; };
+		B00E0001 /* WineEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00E0002 /* WineEngine.swift */; };
+		B00E0003 /* WinePrefix.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00E0004 /* WinePrefix.swift */; };
+		B00E0005 /* WineSteamManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00E0006 /* WineSteamManager.swift */; };
+		B00E0007 /* GameProcess.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00E0008 /* GameProcess.swift */; };
+		B00E0009 /* EngineSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00E000A /* EngineSetupView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -43,18 +41,11 @@
 		B0010013 /* SteamLibraryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SteamLibraryStore.swift; sourceTree = "<group>"; };
 		B0010015 /* Game.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Game.swift; sourceTree = "<group>"; };
 		B0010017 /* PlayerSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerSummary.swift; sourceTree = "<group>"; };
-		B0010019 /* VMState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VMState.swift; sourceTree = "<group>"; };
-		B001001B /* VMManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VMManager.swift; sourceTree = "<group>"; };
-		B001001D /* VMConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VMConfiguration.swift; sourceTree = "<group>"; };
-		B001001F /* VMImageProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VMImageProvider.swift; sourceTree = "<group>"; };
-		B0010021 /* ProtonBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtonBridge.swift; sourceTree = "<group>"; };
 		B0010023 /* GameLauncher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameLauncher.swift; sourceTree = "<group>"; };
 		B0010025 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		B0010027 /* LibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryView.swift; sourceTree = "<group>"; };
 		B0010029 /* GameGridView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameGridView.swift; sourceTree = "<group>"; };
 		B001002B /* GameDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameDetailView.swift; sourceTree = "<group>"; };
-		B001002D /* VMStatusBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VMStatusBarView.swift; sourceTree = "<group>"; };
-		B001002F /* VMProvisionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VMProvisionView.swift; sourceTree = "<group>"; };
 		B0010031 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		B0010033 /* AuthView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthView.swift; sourceTree = "<group>"; };
 		B0010035 /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettings.swift; sourceTree = "<group>"; };
@@ -66,6 +57,11 @@
 		B001003A /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		B001003B /* Meridian.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Meridian.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B001003C /* Package.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Package.swift; path = ../Package.swift; sourceTree = "<group>"; };
+		B00E0002 /* WineEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WineEngine.swift; sourceTree = "<group>"; };
+		B00E0004 /* WinePrefix.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WinePrefix.swift; sourceTree = "<group>"; };
+		B00E0006 /* WineSteamManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WineSteamManager.swift; sourceTree = "<group>"; };
+		B00E0008 /* GameProcess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameProcess.swift; sourceTree = "<group>"; };
+		B00E000A /* EngineSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineSetupView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -85,7 +81,7 @@
 				B001003C /* Package.swift */,
 				B0010042 /* App */,
 				B0010043 /* Steam */,
-				B0010044 /* VM */,
+				B00E0010 /* Engine */,
 				B0010045 /* Launch */,
 				B0010046 /* Models */,
 				B0010047 /* Views */,
@@ -117,15 +113,15 @@
 			path = Steam;
 			sourceTree = "<group>";
 		};
-		B0010044 /* VM */ = {
+		B00E0010 /* Engine */ = {
 			isa = PBXGroup;
 			children = (
-				B001001B /* VMManager.swift */,
-				B001001D /* VMConfiguration.swift */,
-				B001001F /* VMImageProvider.swift */,
-				B0010021 /* ProtonBridge.swift */,
+				B00E0002 /* WineEngine.swift */,
+				B00E0004 /* WinePrefix.swift */,
+				B00E0006 /* WineSteamManager.swift */,
+				B00E0008 /* GameProcess.swift */,
 			);
-			path = VM;
+			path = Engine;
 			sourceTree = "<group>";
 		};
 		B0010045 /* Launch */ = {
@@ -141,7 +137,6 @@
 			children = (
 				B0010015 /* Game.swift */,
 				B0010017 /* PlayerSummary.swift */,
-				B0010019 /* VMState.swift */,
 				B0010035 /* AppSettings.swift */,
 				B0010035B /* AppDetails.swift */,
 			);
@@ -153,7 +148,7 @@
 			children = (
 				B0010025 /* ContentView.swift */,
 				B0010049 /* Library */,
-				B004004A /* VM */,
+				B00E0011 /* Engine */,
 				B004004B /* Settings */,
 				B004004C /* Auth */,
 			);
@@ -194,13 +189,12 @@
 			);
 			sourceTree = "<group>";
 		};
-		B004004A /* VM */ = {
+		B00E0011 /* Engine */ = {
 			isa = PBXGroup;
 			children = (
-				B001002D /* VMStatusBarView.swift */,
-				B001002F /* VMProvisionView.swift */,
+				B00E000A /* EngineSetupView.swift */,
 			);
-			path = VM;
+			path = Engine;
 			sourceTree = "<group>";
 		};
 		B004004B /* Settings */ = {
@@ -301,18 +295,16 @@
 				B001003E /* SteamLocalAuthServer.swift in Sources */,
 				B0010014 /* Game.swift in Sources */,
 				B0010016 /* PlayerSummary.swift in Sources */,
-				B0010018 /* VMState.swift in Sources */,
-				B001001A /* VMManager.swift in Sources */,
-				B001001C /* VMConfiguration.swift in Sources */,
-				B001001E /* VMImageProvider.swift in Sources */,
-				B0010020 /* ProtonBridge.swift in Sources */,
+				B00E0001 /* WineEngine.swift in Sources */,
+				B00E0003 /* WinePrefix.swift in Sources */,
+				B00E0005 /* WineSteamManager.swift in Sources */,
+				B00E0007 /* GameProcess.swift in Sources */,
 				B0010022 /* GameLauncher.swift in Sources */,
 				B0010024 /* ContentView.swift in Sources */,
 				B0010026 /* LibraryView.swift in Sources */,
 				B0010028 /* GameGridView.swift in Sources */,
 				B001002A /* GameDetailView.swift in Sources */,
-				B001002C /* VMStatusBarView.swift in Sources */,
-				B001002E /* VMProvisionView.swift in Sources */,
+				B00E0009 /* EngineSetupView.swift in Sources */,
 				B0010030 /* SettingsView.swift in Sources */,
 				B0010032 /* AuthView.swift in Sources */,
 				B0010034 /* AppSettings.swift in Sources */,
@@ -335,12 +327,9 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
-				ENABLE_APP_SANDBOX = YES;
-				ENABLE_FILE_ACCESS_DOWNLOADS_FOLDER = readwrite;
+				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
-				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_PREVIEWS = YES;
-				ENABLE_USER_SELECTED_FILES = readwrite;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_OPTIMIZATION_LEVEL = 0;
@@ -378,12 +367,9 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
-				ENABLE_APP_SANDBOX = YES;
-				ENABLE_FILE_ACCESS_DOWNLOADS_FOLDER = readwrite;
+				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
-				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_PREVIEWS = YES;
-				ENABLE_USER_SELECTED_FILES = readwrite;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				INFOPLIST_FILE = Meridian/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (

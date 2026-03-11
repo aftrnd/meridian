@@ -25,7 +25,7 @@ final class SteamLibraryStore {
         case .all:      break
         case .recent:   result = recentGames
         case .installed: result = result.filter { $0.isInstalled }
-        case .windows:  result = result.filter { $0.requiresProton }
+        case .windows:  result = result.filter { $0.windowsOnly }
         }
 
         if !searchQuery.isEmpty {

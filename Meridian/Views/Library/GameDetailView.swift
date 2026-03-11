@@ -1,5 +1,4 @@
 import SwiftUI
-import Virtualization
 import AppKit
 
 struct GameDetailView: View {
@@ -7,15 +6,15 @@ struct GameDetailView: View {
     let onDismiss: () -> Void
 
     @Environment(SteamLibraryStore.self)  private var library
-    @Environment(VMManager.self)          private var vmManager
+    @Environment(WineEngine.self)         private var engine
+    @Environment(WineSteamManager.self)   private var steamManager
     @Environment(SteamAuthService.self)   private var steamAuth
     @Environment(SteamSessionBridge.self) private var sessionBridge
     @Environment(GameLauncher.self)       private var launcher
     @Environment(\.openWindow)            private var openWindow
 
-    @State private var showProvisionSheet = false
-    @State private var showPasswordPrompt = false
-    @State private var passwordInput      = ""
+    @State private var showEngineSetup = false
+    @State private var showResetConfirm = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -34,35 +33,29 @@ struct GameDetailView: View {
             footerBar
         }
         .frame(minWidth: 520, minHeight: 480)
-        .sheet(isPresented: $showProvisionSheet) {
-            VMProvisionView().environment(vmManager)
+        .sheet(isPresented: $showEngineSetup) {
+            EngineSetupView().environment(engine)
         }
-        .sheet(isPresented: $showPasswordPrompt) {
-            SteamPasswordSheet(
-                accountName: sessionBridge.detectedAccountName ?? steamAuth.vmUsername,
-                password: $passwordInput
-            ) {
-                steamAuth.vmPassword = passwordInput
-                if let detected = sessionBridge.detectedAccountName, steamAuth.vmUsername.isEmpty {
-                    steamAuth.vmUsername = detected
+        .alert("Reset Wine Environment?", isPresented: $showResetConfirm) {
+            Button("Cancel", role: .cancel) {}
+            Button("Reset", role: .destructive) {
+                Task {
+                    await launcher.cleanupProcesses(engine: engine, steamManager: steamManager)
+                    WinePrefix.defaultPrefix.reset()
                 }
-                showPasswordPrompt = false
-                startLaunch()
-            } onCancel: {
-                showPasswordPrompt = false
             }
+        } message: {
+            Text("This will delete the Wine prefix, Steam installation, and all downloaded game files. The Wine engine runtime will be kept. On next launch, everything will be set up fresh.")
         }
     }
 
-    // MARK: - Hero (banner + title/playtime overlaid at bottom)
+    // MARK: - Hero
 
     private var heroSection: some View {
         heroImage
             .frame(maxWidth: .infinity)
             .frame(height: 240)
             .clipped()
-            // Localised readability gradient — only covers the bottom 110pt
-            // where the text sits, not the whole image.
             .overlay(alignment: .bottom) {
                 LinearGradient(
                     colors: [.clear, .black.opacity(0.6)],
@@ -72,7 +65,6 @@ struct GameDetailView: View {
                 .frame(height: 110)
                 .allowsHitTesting(false)
             }
-            // Title + metadata float over the bottom of the art
             .overlay(alignment: .bottom) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(currentGame.name)
@@ -88,8 +80,8 @@ struct GameDetailView: View {
                                 .font(.subheadline)
                                 .foregroundStyle(.white.opacity(0.8))
                         }
-                        if currentGame.requiresProton {
-                            ProtonBadge()
+                        if currentGame.windowsOnly {
+                            WindowsBadge()
                         }
                     }
                 }
@@ -142,21 +134,29 @@ struct GameDetailView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .center, spacing: 12) {
                 playButton
-                vmStatusPill
                 Spacer()
             }
-            // Activity card appears during any active phase so the user always
-            // knows what is happening instead of staring at a frozen 0% bar.
             if isActivePhase {
-                InstallActivityCard(launcher: launcher, openWindow: openWindow)
+                ActivityCard(launcher: launcher, openWindow: openWindow)
             }
         }
     }
 
     private var isActivePhase: Bool {
         switch launcher.launchState {
-        case .preparingVM, .connectingBridge, .launching, .installing, .running: return true
-        default: return false
+        case .preparingEngine, .preparingPrefix, .bootstrappingSteam, .launching, .running:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private var isInProgress: Bool {
+        switch launcher.launchState {
+        case .preparingEngine, .preparingPrefix, .bootstrappingSteam, .launching:
+            return true
+        default:
+            return false
         }
     }
 
@@ -165,74 +165,33 @@ struct GameDetailView: View {
         switch launcher.launchState {
         case .idle, .exited:
             Button { handlePlayTapped() } label: {
-                Label(primaryButtonTitle,
+                Label(currentGame.isInstalled ? "Play" : "Install & Play",
                       systemImage: currentGame.isInstalled ? "play.fill" : "arrow.down.circle.fill")
                     .font(.headline)
                     .frame(minWidth: 130)
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .disabled(!canLaunch)
+            .disabled(!steamAuth.isAuthenticated)
 
-        case .preparingVM:
-            Button {} label: {
-                HStack(spacing: 8) {
-                    ProgressView().scaleEffect(0.75)
-                    Text("Starting VM…")
-                }
-                .frame(minWidth: 130)
+        case .preparingEngine, .preparingPrefix:
+            HStack(spacing: 8) {
+                ProgressButton("Preparing…")
+                cancelButton
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .disabled(true)
 
-        case .connectingBridge:
-            Button {} label: {
-                HStack(spacing: 8) {
-                    ProgressView().scaleEffect(0.75)
-                    Text("Connecting…")
-                }
-                .frame(minWidth: 130)
+        case .bootstrappingSteam:
+            HStack(spacing: 8) {
+                ProgressButton("Updating Steam…")
+                cancelButton
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .disabled(true)
 
         case .launching:
-            Button {} label: {
-                HStack(spacing: 6) {
-                    ProgressView().scaleEffect(0.8)
-                    Text("Launching…")
-                }
-                .frame(minWidth: 130)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .disabled(true)
-
-        case .installing(_, let pct):
-            Button {} label: {
-                HStack(spacing: 8) {
-                    if pct > 0 {
-                        ProgressView(value: pct / 100)
-                            .progressViewStyle(.linear)
-                            .frame(width: 54)
-                        Text("\(Int(pct))%")
-                            .monospacedDigit()
-                    } else {
-                        ProgressView().scaleEffect(0.75)
-                        Text("Installing…")
-                    }
-                }
-                .frame(minWidth: 130)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .disabled(true)
+            ProgressButton("Launching…")
 
         case .running:
             HStack(spacing: 8) {
-                Button { openWindow(id: "game-window") } label: {
+                Button {} label: {
                     Label("Running", systemImage: "play.circle.fill")
                         .font(.headline)
                         .frame(minWidth: 100)
@@ -241,7 +200,7 @@ struct GameDetailView: View {
                 .controlSize(.large)
 
                 Button {
-                    Task { await launcher.stopGame() }
+                    Task { await launcher.stopGame(engine: engine, steamManager: steamManager) }
                 } label: {
                     Label("Stop", systemImage: "stop.fill")
                 }
@@ -251,21 +210,31 @@ struct GameDetailView: View {
 
         case .failed(let msg):
             VStack(alignment: .leading, spacing: 6) {
-                if isProvisioningError(msg) {
-                    Button { showProvisionSheet = true } label: {
-                        Label("Set Up VM…", systemImage: "arrow.down.circle")
-                            .frame(minWidth: 130)
+                HStack(spacing: 8) {
+                    if !engine.isReady {
+                        Button { showEngineSetup = true } label: {
+                            Label("Set Up Engine…", systemImage: "arrow.down.circle")
+                                .frame(minWidth: 130)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                    } else {
+                        Button { handlePlayTapped() } label: {
+                            Label("Retry", systemImage: "arrow.clockwise")
+                                .frame(minWidth: 130)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                } else {
-                    Button { handlePlayTapped() } label: {
-                        Label("Retry", systemImage: "arrow.clockwise")
-                            .frame(minWidth: 130)
+
+                    Button { showResetConfirm = true } label: {
+                        Label("Reset", systemImage: "trash")
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.bordered)
                     .controlSize(.large)
+                    .help("Delete Wine prefix and start fresh")
                 }
+
                 Text(msg)
                     .font(.caption)
                     .foregroundStyle(.red)
@@ -274,25 +243,21 @@ struct GameDetailView: View {
         }
     }
 
+    private var cancelButton: some View {
+        Button {
+            Task { await launcher.cancelLaunch(engine: engine, steamManager: steamManager) }
+        } label: {
+            Label("Cancel", systemImage: "xmark")
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.large)
+    }
+
     private var currentGame: Game {
         library.games.first(where: { $0.id == game.id }) ?? game
     }
 
-    private var primaryButtonTitle: String {
-        currentGame.isInstalled ? "Play" : "Install & Play"
-    }
-
-    private var canLaunch: Bool {
-        guard steamAuth.isAuthenticated else { return false }
-        return !vmManager.state.isTransitioning
-    }
-
-    private var vmStatusPill: some View {
-        VMStatusPill(state: vmManager.state)
-    }
-
     // MARK: - Info
-    // Simple HStack rows instead of Grid — fully predictable, no column-width edge cases.
 
     private var infoSection: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -301,14 +266,14 @@ struct GameDetailView: View {
                 Divider().padding(.leading, 12)
             }
             infoRow("App ID", value: String(currentGame.id), monospaced: true)
-            if currentGame.requiresProton {
+            if currentGame.windowsOnly {
                 Divider().padding(.leading, 12)
                 HStack {
                     Text("Compatibility")
                         .foregroundStyle(.secondary)
                         .font(.subheadline)
                     Spacer()
-                    ProtonBadge()
+                    WindowsBadge()
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 9)
@@ -332,44 +297,44 @@ struct GameDetailView: View {
 
     // MARK: - Helpers
 
-    private func isProvisioningError(_ msg: String) -> Bool {
-        msg.contains("kernel") || msg.contains("provision") || msg.contains("base image")
-    }
-
     private func handlePlayTapped() {
-        guard vmManager.imageProvider.isImageReady else {
-            showProvisionSheet = true
+        guard engine.isReady else {
+            showEngineSetup = true
             return
         }
-        if !sessionBridge.hasInstallCredentials(auth: steamAuth) {
-            passwordInput = ""
-            showPasswordPrompt = true
-            return
-        }
-        startLaunch()
-    }
-
-    private func startLaunch() {
-        openWindow(id: "game-window")
-        Task {
-            await launcher.launch(
-                game: currentGame,
-                vmManager: vmManager,
-                steamAuth: steamAuth,
-                sessionBridge: sessionBridge,
-                library: library
-            )
-        }
+        launcher.launch(
+            game: currentGame,
+            engine: engine,
+            steamManager: steamManager,
+            sessionBridge: sessionBridge,
+            library: library
+        )
     }
 }
 
-// MARK: - Install Activity Card
+// MARK: - Progress Button
 
-/// Inline status card shown during any active launch phase.
-/// Surfaces the current activity message, a live tail of the last few
-/// meaningful agent log lines, an elapsed-time counter, and a shortcut
-/// to the full log window.
-private struct InstallActivityCard: View {
+private struct ProgressButton: View {
+    let title: String
+    init(_ title: String) { self.title = title }
+
+    var body: some View {
+        Button {} label: {
+            HStack(spacing: 8) {
+                ProgressView().scaleEffect(0.75)
+                Text(title)
+            }
+            .frame(minWidth: 130)
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.large)
+        .disabled(true)
+    }
+}
+
+// MARK: - Activity Card
+
+private struct ActivityCard: View {
     let launcher: GameLauncher
     let openWindow: OpenWindowAction
 
@@ -377,15 +342,11 @@ private struct InstallActivityCard: View {
     @State private var timer: Timer?
 
     private var recentLogs: [String] {
-        launcher.logs
-            .filter { !$0.hasPrefix("steam-log:") && !$0.hasPrefix("steam console log") }
-            .suffix(3)
-            .map { $0 }
+        launcher.logs.suffix(3).map { $0 }
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            // Activity row
             HStack(spacing: 8) {
                 ProgressView()
                     .scaleEffect(0.7)
@@ -413,7 +374,6 @@ private struct InstallActivityCard: View {
                 .foregroundStyle(.secondary)
             }
 
-            // Live log tail — last 3 non-diagnostic lines
             if !recentLogs.isEmpty {
                 Divider()
                 VStack(alignment: .leading, spacing: 3) {
@@ -442,11 +402,9 @@ private struct InstallActivityCard: View {
     }
 
     private func startTimer() {
-        elapsed = launcher.installStartedAt.map { -$0.timeIntervalSinceNow } ?? 0
-        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [self] _ in
-            Task { @MainActor in
-                self.elapsed = self.launcher.installStartedAt.map { -$0.timeIntervalSinceNow } ?? self.elapsed + 1
-            }
+        elapsed = 0
+        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
+            Task { @MainActor in elapsed += 1 }
         }
     }
 
@@ -527,142 +485,5 @@ struct LaunchLogWindow: View {
                 proxy.scrollTo(n - 1, anchor: .bottom)
             }
         }
-    }
-}
-
-// MARK: - VM Game Window
-
-struct VMGameWindow: View {
-    let vmManager: VMManager
-    let launcher: GameLauncher
-
-    var body: some View {
-        ZStack(alignment: .topTrailing) {
-            VMDisplayView(vmManager: vmManager)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .ignoresSafeArea()
-
-            Button {
-                Task {
-                    await launcher.stopGame()
-                    closeGameWindow()
-                }
-            } label: {
-                Label("Stop Game", systemImage: "stop.fill")
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.red)
-            .controlSize(.small)
-            .padding(12)
-        }
-        .frame(minWidth: 1280, minHeight: 800)
-        .onAppear {
-            // Enter full-screen when the game window opens.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                closeGameWindow(toggleFullscreen: true)
-            }
-        }
-    }
-
-    private func closeGameWindow(toggleFullscreen: Bool = false) {
-        // Find the game window by its identifier string or title.
-        let window = NSApp.windows.first {
-            $0.identifier?.rawValue == "game-window" ||
-            $0.title == "Game" ||
-            $0.contentView?.subviews.isEmpty == false && $0.title.isEmpty
-        }
-        if toggleFullscreen {
-            window?.toggleFullScreen(nil)
-        } else {
-            if window?.styleMask.contains(.fullScreen) == true {
-                window?.toggleFullScreen(nil)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    window?.close()
-                }
-            } else {
-                window?.close()
-            }
-        }
-    }
-}
-
-// MARK: - VZVirtualMachineView SwiftUI wrapper
-
-/// Wraps VZVirtualMachineView as an NSViewRepresentable.
-///
-/// makeNSView returns the shared cached view from VMManager — this is important
-/// because VZVirtualMachineView must not be recreated per SwiftUI render cycle.
-///
-/// updateNSView re-assigns virtualMachine so that if the VM is restarted (new
-/// VZVirtualMachine instance), the view picks up the new machine without
-/// requiring the window to be closed and reopened.
-struct VMDisplayView: NSViewRepresentable {
-    let vmManager: VMManager
-
-    func makeNSView(context: Context) -> VZVirtualMachineView {
-        vmManager.vmView
-    }
-
-    func updateNSView(_ view: VZVirtualMachineView, context: Context) {
-        if view.virtualMachine !== vmManager.virtualMachine {
-            view.virtualMachine = vmManager.virtualMachine
-        }
-    }
-}
-
-// MARK: - Steam Password Prompt
-
-/// One-time prompt shown before the first game install. The username is
-/// auto-detected from macOS Steam's loginusers.vdf; only the password is needed.
-struct SteamPasswordSheet: View {
-    let accountName: String
-    @Binding var password: String
-    let onSave: () -> Void
-    let onCancel: () -> Void
-
-    var body: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "lock.shield")
-                .font(.system(size: 36))
-                .foregroundStyle(.secondary)
-
-            Text("Steam Password Required")
-                .font(.title2)
-                .fontWeight(.semibold)
-
-            Text("Meridian needs your Steam password to download games inside the VM. This is stored securely in Keychain and only sent to Steam's servers.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 360)
-
-            VStack(alignment: .leading, spacing: 8) {
-                TextField("Steam account", text: .constant(accountName))
-                    .textFieldStyle(.roundedBorder)
-                    .disabled(true)
-
-                SecureField("Password", text: $password)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit {
-                        if !password.isEmpty { onSave() }
-                    }
-            }
-            .frame(width: 280)
-
-            HStack(spacing: 12) {
-                Button("Cancel", role: .cancel, action: onCancel)
-                    .buttonStyle(.bordered)
-                    .keyboardShortcut(.cancelAction)
-
-                Button("Save & Continue") { onSave() }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(password.isEmpty)
-                    .keyboardShortcut(.defaultAction)
-            }
-        }
-        .padding(32)
-        .frame(width: 420)
     }
 }

@@ -57,6 +57,11 @@
 				<key>NSExceptionAllowsInsecureHTTPLoads</key>
 				<false/>
 			</dict>
+			<key>cdn.akamai.steamstatic.com</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<false/>
+			</dict>
 		</dict>
 	</dict>
 	<!-- Custom URL scheme for Steam OpenID callback -->

@@ -7,7 +7,8 @@ struct MeridianApp: App {
 
     @State private var steamAuth     = SteamAuthService()
     @State private var library       = SteamLibraryStore()
-    @State private var vmManager     = VMManager()
+    @State private var engine        = WineEngine()
+    @State private var steamManager  = WineSteamManager()
     @State private var sessionBridge = SteamSessionBridge()
     @State private var launcher      = GameLauncher()
 
@@ -16,7 +17,8 @@ struct MeridianApp: App {
             ContentView()
                 .environment(steamAuth)
                 .environment(library)
-                .environment(vmManager)
+                .environment(engine)
+                .environment(steamManager)
                 .environment(sessionBridge)
                 .environment(launcher)
                 .frame(minWidth: 960, minHeight: 620)
@@ -26,13 +28,6 @@ struct MeridianApp: App {
         .commands {
             CommandGroup(replacing: .newItem) {}
             CommandMenu("Meridian") {
-                Button("Check for VM Image Update") {
-                    Task { await vmManager.imageProvider.checkForUpdate() }
-                }
-                .keyboardShortcut("U", modifiers: [.command, .shift])
-
-                Divider()
-
                 Button("Sign Out of Steam") {
                     steamAuth.signOut()
                 }
@@ -47,21 +42,10 @@ struct MeridianApp: App {
         .windowResizability(.contentMinSize)
         .defaultSize(width: 560, height: 320)
 
-        // Full-screen game window opened when a game launches.
-        // Independent of the main Meridian window — the player interacts
-        // directly with the VM display here.
-        WindowGroup("Game", id: "game-window") {
-            VMGameWindow(vmManager: vmManager, launcher: launcher)
-                .environment(vmManager)
-                .environment(launcher)
-        }
-        .windowStyle(.hiddenTitleBar)
-        .windowResizability(.contentSize)
-
         Settings {
             SettingsView()
                 .environment(steamAuth)
-                .environment(vmManager)
+                .environment(engine)
         }
     }
 }

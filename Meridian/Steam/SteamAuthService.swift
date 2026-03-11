@@ -11,11 +11,10 @@ import Observation
 /// 4. Store SteamID securely in Keychain.
 /// 5. Fetch display name / avatar directly from Steam Web API using the user's API key.
 ///
-/// VM sign-in:
-/// SteamSessionBridge detects macOS Steam session files and shares them into the VM
-/// via virtio-fs so the Linux Steam client can sign in without any additional prompt.
-/// If no macOS Steam is present, a Steam credential pair (username/password) stored
-/// in Keychain is injected at launch time as a fallback.
+/// Wine prefix sign-in:
+/// SteamSessionBridge copies macOS Steam session files into the Wine prefix so the
+/// Windows Steam client auto-logs in without any additional prompt. If no macOS Steam
+/// session is found, the user signs into Steam once inside the Wine window.
 @Observable
 @MainActor
 final class SteamAuthService: NSObject {
@@ -72,8 +71,6 @@ final class SteamAuthService: NSObject {
     private enum KeychainKey {
         static let steamID        = "meridian.steam.steamid"
         static let apiKey         = "meridian.steam.apikey"
-        static let vmUsername     = "meridian.steam.vm.username"
-        static let vmPassword     = "meridian.steam.vm.password"
     }
 
     // MARK: - Computed credential accessors
@@ -88,24 +85,6 @@ final class SteamAuthService: NSObject {
             } else {
                 saveSecret(trimmed, key: KeychainKey.apiKey)
             }
-        }
-    }
-
-    /// Optional Steam username for VM auto-login fallback.
-    var vmUsername: String {
-        get { loadSecret(key: KeychainKey.vmUsername) ?? "" }
-        set {
-            if newValue.isEmpty { deleteSecret(key: KeychainKey.vmUsername) }
-            else { saveSecret(newValue, key: KeychainKey.vmUsername) }
-        }
-    }
-
-    /// Optional Steam password for VM auto-login fallback (stored encrypted in Keychain).
-    var vmPassword: String {
-        get { loadSecret(key: KeychainKey.vmPassword) ?? "" }
-        set {
-            if newValue.isEmpty { deleteSecret(key: KeychainKey.vmPassword) }
-            else { saveSecret(newValue, key: KeychainKey.vmPassword) }
         }
     }
 
@@ -204,7 +183,7 @@ final class SteamAuthService: NSObject {
         avatarURL = nil
         deleteSecret(key: KeychainKey.steamID)
         apiKeyPromptDismissed = false
-        // Intentionally preserve apiKey, vmUsername, vmPassword across sign-out
+        // Intentionally preserve apiKey across sign-out
         // so users don't have to re-enter them if they sign back in.
     }
 

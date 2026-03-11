@@ -29,9 +29,6 @@ struct GameGridView: View {
         .contentShape(Rectangle())
     }
 
-    // Constraining aspectRatio on the AsyncImage container (not the inner image) ensures
-    // the card slot always reserves the correct proportional height regardless of load state,
-    // which prevents any single card from disrupting the grid row alignment.
     private var artSection: some View {
         AsyncImage(url: game.capsuleURL) { phase in
             switch phase {
@@ -78,8 +75,8 @@ struct GameGridView: View {
 
                 Spacer()
 
-                if game.requiresProton {
-                    ProtonBadge()
+                if game.windowsOnly {
+                    WindowsBadge()
                 }
             }
         }
@@ -90,11 +87,11 @@ struct GameGridView: View {
     }
 }
 
-// MARK: - Proton badge
+// MARK: - Windows badge
 
-struct ProtonBadge: View {
+struct WindowsBadge: View {
     var body: some View {
-        Label("Proton", systemImage: "cpu")
+        Label("Windows", systemImage: "desktopcomputer")
             .font(.system(size: 9, weight: .semibold))
             .foregroundStyle(.white)
             .padding(.horizontal, 5)

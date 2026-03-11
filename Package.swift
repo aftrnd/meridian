@@ -15,13 +15,5 @@ let package = Package(
                 .enableExperimentalFeature("StrictConcurrency")
             ]
         ),
-        .testTarget(
-            name: "MeridianTests",
-            dependencies: [],
-            path: "Tests/MeridianTests",
-            swiftSettings: [
-                .enableExperimentalFeature("StrictConcurrency")
-            ]
-        ),
     ]
 )

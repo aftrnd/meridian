@@ -1,113 +1,113 @@
 # Meridian
 
-Native macOS app for running Windows Steam games through a lightweight Ubuntu VM with Proton GE.
+Native macOS app for running Windows Steam games through Wine + GPTK (Game Porting Toolkit).
 
 ## How It Works
 
 1. **Sign in with Steam** via OpenID (`ASWebAuthenticationSession`), no Steam password stored by Meridian.
 2. **Fetch library metadata** from Steam Web API (`IPlayerService/GetOwnedGames`).
-3. **Boot VM on demand** using Apple `Virtualization.framework`.
-4. **Connect host ↔ guest bridge** over virtio-vsock (port `1234`).
-5. **Install if needed, then launch** through Steam + Proton inside the guest.
-6. **Render in native window** via `VZVirtualMachineView` + virtio-gpu.
+3. **Launch games through Wine** — DirectX calls are translated to Metal via D3DMetal (Apple GPTK).
+4. **Steam runs silently** in the background inside a Wine prefix. Session files are copied from macOS Steam for auto-login.
+5. **Games render natively** through Metal — no VM, no virtual display, just native macOS windows.
 
-## UI Behavior
+## Architecture
 
-- Main app uses a two-pane layout: sidebar + full library content.
-- Clicking a game opens a dedicated game-detail window.
-- Launch logs in game detail are selectable and can be copied with a `Copy` button.
-- VM state appears as a compact floating status pill in the library, not a full-width bar.
+```
+MeridianApp (SwiftUI)
+├── Steam/           — OpenID auth, Web API, library sync, session bridge
+├── Engine/          — Wine+GPTK runtime management, prefix management, Steam lifecycle
+├── Launch/          — Game launch orchestration
+├── Models/          — Game, AppSettings, PlayerSummary, AppDetails
+└── Views/           — Library, game detail, settings, auth, engine setup
+```
+
+### Translation Stack
+
+```
+Windows Game (.exe)
+    → Wine (Win32 API translation)
+        → GPTK / D3DMetal (DirectX → Metal)
+            → Metal GPU (native rendering)
+```
+
+No VM. No guest OS. No virtio. Games run as macOS processes.
+
+## Game Launch Flow
+
+1. User clicks **Play** in the library
+2. Meridian verifies Wine+GPTK runtime is installed
+3. Creates or reuses Wine prefix (`~/Library/Application Support/com.meridian.app/bottles/steam/`)
+4. Copies macOS Steam session files for auto-login (if Steam for Mac is installed)
+5. Starts `steam.exe -silent` in Wine (background, no visible window)
+6. Waits for Steam IPC readiness
+7. Launches game via `steam://rungameid/<APPID>` protocol
+8. Game window appears as a native macOS window
+9. Game exits → returns to library
 
 ## Requirements
 
 - macOS 15+ (macOS 26 recommended)
 - Apple Silicon Mac
 - Xcode 16+ / Swift 6
-- Steam Web API key: [https://steamcommunity.com/dev/apikey](https://steamcommunity.com/dev/apikey)
-- Disk: ~12 GB base image + expansion disk + game installs
+- Steam Web API key: [steamcommunity.com/dev/apikey](https://steamcommunity.com/dev/apikey)
 
-## App Setup
+## First-Time Setup
 
 1. Open `Meridian.xcodeproj` in Xcode.
 2. Set your Team in Signing & Capabilities.
 3. Build and run.
 4. Sign in with Steam and provide your API key.
-5. Either click **Set Up** (download image), or install a local build image (see below).
+5. Click **Set Up Engine** when prompted to download the Wine+GPTK runtime (~2–3 GB).
+6. Click **Play** on any game — Steam installs into the Wine prefix automatically.
 
-## Build A Fresh Local Base Image (No UTM Manual Steps)
+## Engine Runtime
 
-Everything is scripted in-repo.
+The Wine+GPTK runtime is downloaded from GitHub releases and stored at:
 
-### Host dependencies
-
-```bash
-brew install qemu sshpass lzfse
+```
+~/Library/Application Support/com.meridian.app/engine/
+├── wine/bin/wine64        — Wine binary
+└── lib/                   — D3DMetal, DXVK, system libraries
 ```
 
-`cloud-localds` is optional; `Scripts/build-meridian-image.sh` falls back to `hdiutil` automatically when it is not installed.
+The GitHub repo slug is configurable in Settings (default: `aftrnd/meridian`).
 
-### Full local rebuild flow
+## Wine Prefix
 
-```bash
-# 1) Build latest guest agent
-cd Agent
-GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o /tmp/meridian-agent-linux-arm64 .
+A single shared Wine prefix is used for Steam and all games:
 
-# 2) Build fresh VM image + kernel/initrd
-cd ..
-MERIDIAN_AGENT_BIN=/tmp/meridian-agent-linux-arm64 \
-NO_COMPRESS=1 \
-bash Scripts/build-meridian-image.sh
-
-# 3) Install into local Meridian VM directory
-bash Scripts/install-local.sh --vm-dir /tmp/meridian-vm
+```
+~/Library/Application Support/com.meridian.app/bottles/steam/
+├── drive_c/               — Virtual C:\ drive
+│   └── Program Files (x86)/Steam/  — Steam installation
+├── system.reg             — Windows registry
+└── user.reg               — User registry
 ```
 
-Artifacts are copied to:
+## Steam Session
 
-- `~/Library/Application Support/com.meridian.app/vm/meridian-base.img`
-- `~/Library/Application Support/com.meridian.app/vm/vmlinuz`
-- `~/Library/Application Support/com.meridian.app/vm/initrd`
+Meridian copies session files from macOS Steam (`~/Library/Application Support/Steam/`) into the Wine prefix to enable auto-login:
 
-## Smoke Test A Built Image
+- `config/loginusers.vdf` — logged-in user
+- `config/config.vdf` — auth tokens
+- `registry.vdf` — Steam settings
+- `ssfn*` — machine auth tokens
 
-```bash
-# Boots image in QEMU and validates Steam/Proton/agent/session wiring
-MERIDIAN_VM_DIR="$HOME/Library/Application Support/com.meridian.app/vm" \
-bash Tests/Integration/test-guest.sh
-```
+If macOS Steam is not installed, the user signs into Steam once inside the Wine window. Steam remembers credentials for all subsequent launches.
 
-If a VM is already running on port `2222`, run with `--no-boot`.
+## Known Limitations
 
-## Patch Existing Local VM Runtime (No Rebuild)
+- **Anti-cheat**: EasyAntiCheat and BattlEye block Wine/GPTK on macOS. Most competitive online games will not work.
+- **Denuvo DRM**: Poor compatibility under Wine. Many Denuvo-protected titles will fail.
+- **First Steam login**: Steam Guard may require one-time email/authenticator verification even with session copy.
+- **Performance**: Translation overhead exists. Most games run well on M-series Macs, but heavy DX12/ray-tracing titles may struggle.
+- **Not all games work**: Compatibility varies by game. This is inherent to Wine/GPTK translation.
 
-If Steam boot in-guest prompts for package cache updates or fails with missing x86 loader paths, patch the current local VM image in place:
+## Settings
 
-```bash
-bash Scripts/patch-vm-steam-runtime.sh
-```
-
-This boots the image in QEMU, applies non-interactive Steam runtime prerequisites, then cleanly powers off.
-
-## Base Image Hosting
-
-The default image source is GitHub Releases at
-[aftrnd/meridian](https://github.com/aftrnd/meridian/releases).
-
-`VMImageProvider` resolves latest release dynamically:
-
-```text
-GET https://api.github.com/repos/{imageRepoSlug}/releases/latest
-```
-
-The slug is configurable in Settings (`imageRepoSlug`) for forks/self-hosting.
-
-## Guest Image Contents (Current)
-
-- Ubuntu 24.04 ARM64
-- Steam launcher/runtime
-- Proton GE (`GE-Proton9-27`)
-- Sway + XWayland session
-- Mesa + Vulkan userspace (`libgl1-mesa-dri`, `mesa-vulkan-drivers`, `vulkan-tools`)
-- `meridian-agent` systemd service (vsock bridge on port `1234`)
-- Rosetta setup service mountpoint/config for Meridian VZ runs
+| Setting | Description |
+|---------|-------------|
+| Engine Repo Slug | GitHub repo for Wine+GPTK releases |
+| Metal HUD | Show GPU performance overlay |
+| Virtual Desktop | Force fixed-resolution Wine desktop |
+| Steam Web API Key | Required for library sync |

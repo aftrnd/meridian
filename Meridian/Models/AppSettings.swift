@@ -6,54 +6,41 @@ import Observation
 final class AppSettings: @unchecked Sendable {
     static let shared = AppSettings()
 
-    // MARK: - VM
+    // MARK: - Engine
 
-    /// CPU core count allocated to the VM (default: half of available)
-    var vmCPUCount: Int {
-        get { UserDefaults.standard.integer(forKey: "vmCPUCount").nonZero ?? max(2, ProcessInfo.processInfo.processorCount / 2) }
-        set { UserDefaults.standard.set(newValue, forKey: "vmCPUCount") }
+    /// GitHub repo slug used to fetch Wine+GPTK engine releases.
+    var engineRepoSlug: String {
+        get { UserDefaults.standard.string(forKey: "engineRepoSlug") ?? "aftrnd/meridian" }
+        set { UserDefaults.standard.set(newValue, forKey: "engineRepoSlug") }
     }
 
-    /// RAM in GiB allocated to the VM (default: 4 GiB)
-    var vmMemoryGiB: Int {
-        get { UserDefaults.standard.integer(forKey: "vmMemoryGiB").nonZero ?? 4 }
-        set { UserDefaults.standard.set(newValue, forKey: "vmMemoryGiB") }
+    /// Show the Metal performance HUD overlay during gameplay.
+    var metalHUD: Bool {
+        get { UserDefaults.standard.bool(forKey: "metalHUD") }
+        set { UserDefaults.standard.set(newValue, forKey: "metalHUD") }
     }
 
-    /// Disk storage allocated for the VM expansion layer in GiB (default: 64 GiB)
-    var vmDiskGiB: Int {
-        get { UserDefaults.standard.integer(forKey: "vmDiskGiB").nonZero ?? 64 }
-        set { UserDefaults.standard.set(newValue, forKey: "vmDiskGiB") }
+    /// Force Wine virtual desktop at a fixed resolution instead of windowed mode.
+    var useVirtualDesktop: Bool {
+        get { UserDefaults.standard.bool(forKey: "useVirtualDesktop") }
+        set { UserDefaults.standard.set(newValue, forKey: "useVirtualDesktop") }
     }
 
-    /// Whether to keep the VM running between game sessions (faster subsequent launches)
-    var keepVMRunning: Bool {
-        get { UserDefaults.standard.bool(forKey: "keepVMRunning") }
-        set { UserDefaults.standard.set(newValue, forKey: "keepVMRunning") }
+    /// Virtual desktop width in pixels (used when useVirtualDesktop is enabled).
+    var virtualDesktopWidth: Int {
+        get { UserDefaults.standard.integer(forKey: "virtualDesktopWidth").nonZero ?? 1920 }
+        set { UserDefaults.standard.set(newValue, forKey: "virtualDesktopWidth") }
     }
 
-    /// VM display width in pixels (default: 1920)
-    var vmDisplayWidth: Int {
-        get { UserDefaults.standard.integer(forKey: "vmDisplayWidth").nonZero ?? 1920 }
-        set { UserDefaults.standard.set(newValue, forKey: "vmDisplayWidth") }
+    /// Virtual desktop height in pixels (used when useVirtualDesktop is enabled).
+    var virtualDesktopHeight: Int {
+        get { UserDefaults.standard.integer(forKey: "virtualDesktopHeight").nonZero ?? 1080 }
+        set { UserDefaults.standard.set(newValue, forKey: "virtualDesktopHeight") }
     }
 
-    /// VM display height in pixels (default: 1080)
-    var vmDisplayHeight: Int {
-        get { UserDefaults.standard.integer(forKey: "vmDisplayHeight").nonZero ?? 1080 }
-        set { UserDefaults.standard.set(newValue, forKey: "vmDisplayHeight") }
-    }
+    // MARK: - Library
 
-    /// GitHub repo slug used to fetch Meridian base image releases, e.g. "aftrnd/meridian"
-    var imageRepoSlug: String {
-        get { UserDefaults.standard.string(forKey: "imageRepoSlug") ?? "aftrnd/meridian" }
-        set { UserDefaults.standard.set(newValue, forKey: "imageRepoSlug") }
-    }
-
-    /// Locally cached set of Steam app IDs that are known to be installed in the VM.
-    ///
-    /// This cache is refreshed opportunistically (launch/install checks) and keeps
-    /// the Installed filter useful between app launches.
+    /// Locally cached set of Steam app IDs that are known to be installed.
     var installedAppIDs: Set<Int> {
         get { Set(UserDefaults.standard.array(forKey: "installedAppIDs") as? [Int] ?? []) }
         set { UserDefaults.standard.set(Array(newValue), forKey: "installedAppIDs") }

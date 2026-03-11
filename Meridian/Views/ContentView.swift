@@ -3,11 +3,11 @@ import SwiftUI
 struct ContentView: View {
     @Environment(SteamAuthService.self) private var steamAuth
     @Environment(SteamLibraryStore.self) private var library
-    @Environment(VMManager.self) private var vmManager
+    @Environment(WineEngine.self) private var engine
 
     @State private var selectedGame: Game?
     @State private var columnVisibility = NavigationSplitViewVisibility.all
-    @State private var showProvision = false
+    @State private var showEngineSetup = false
 
     var body: some View {
         Group {
@@ -24,17 +24,14 @@ struct ContentView: View {
                     )) {
                         APIKeySetupSheet()
                     }
-                    .sheet(isPresented: $showProvision) {
-                        VMProvisionView()
-                            .environment(vmManager)
+                    .sheet(isPresented: $showEngineSetup) {
+                        EngineSetupView()
+                            .environment(engine)
                     }
                     .sheet(item: $selectedGame) { game in
                         GameDetailView(game: game) {
                             selectedGame = nil
                         }
-                    }
-                    .onAppear {
-                        if case .notProvisioned = vmManager.state { showProvision = true }
                     }
             }
         }
@@ -55,7 +52,7 @@ struct ContentView: View {
                 .safeAreaInset(edge: .bottom) {
                     HStack {
                         Spacer()
-                        VMStatusBarView(onSetUp: { showProvision = true })
+                        EngineStatusPill(onSetUp: { showEngineSetup = true })
                     }
                     .padding(.horizontal, 12)
                     .padding(.bottom, 8)
@@ -82,11 +79,6 @@ private struct SidebarView: View {
         }
     }
 
-    // The avatar is clipped with ContainerRelativeShape so it adapts to the
-    // sidebar panel's corner radius at the bottom — the "inner radius" of the
-    // sidebar's rounded corner — rather than being a hard circle against whatever
-    // background is behind it. On macOS 26 Tahoe this rounds to match the glass
-    // panel geometry automatically.
     private var profileRow: some View {
         HStack(spacing: 10) {
             AsyncImage(url: steamAuth.avatarURL) { phase in
@@ -122,7 +114,52 @@ private struct SidebarView: View {
         case .all:       return "square.grid.2x2"
         case .recent:    return "clock"
         case .installed: return "internaldrive"
-        case .windows:   return "cpu"
+        case .windows:   return "desktopcomputer"
+        }
+    }
+}
+
+// MARK: - Engine Status Pill
+
+private struct EngineStatusPill: View {
+    @Environment(WineEngine.self) private var engine
+    var onSetUp: (() -> Void)?
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(dotColor)
+                .frame(width: 7, height: 7)
+            Text(statusLabel)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if !engine.isReady {
+                Button("Set Up…") { onSetUp?() }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+                    .foregroundStyle(.tint)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(.regularMaterial, in: Capsule())
+        .overlay(Capsule().strokeBorder(.separator, lineWidth: 0.5))
+    }
+
+    private var dotColor: Color {
+        switch engine.state {
+        case .ready:          return .green
+        case .notInstalled:   return .gray
+        case .error:          return .red
+        }
+    }
+
+    private var statusLabel: String {
+        switch engine.state {
+        case .ready:          return "Engine: \(engine.backendName)"
+        case .notInstalled:   return "Engine Not Found"
+        case .error:          return "Engine Error"
         }
     }
 }
@@ -131,6 +168,7 @@ private struct SidebarView: View {
     ContentView()
         .environment(SteamAuthService())
         .environment(SteamLibraryStore())
-        .environment(VMManager())
+        .environment(WineEngine())
+        .environment(WineSteamManager())
         .environment(SteamSessionBridge())
 }

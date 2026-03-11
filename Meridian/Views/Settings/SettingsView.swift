@@ -2,20 +2,15 @@ import SwiftUI
 
 struct SettingsView: View {
     @Environment(SteamAuthService.self) private var steamAuth
-    @Environment(VMManager.self) private var vmManager
-
-    private let settings = AppSettings.shared
+    @Environment(WineEngine.self) private var engine
 
     var body: some View {
         TabView {
             SteamSettingsTab()
                 .tabItem { Label("Steam", systemImage: "person.badge.key") }
 
-            VMSettingsTab()
-                .tabItem { Label("Virtual Machine", systemImage: "server.rack") }
-
-            AdvancedSettingsTab()
-                .tabItem { Label("Advanced", systemImage: "gearshape.2") }
+            EngineSettingsTab()
+                .tabItem { Label("Engine", systemImage: "gearshape.2") }
         }
         .frame(width: 520)
         .padding(24)
@@ -100,16 +95,7 @@ private struct SteamSettingsTab: View {
             } header: {
                 Text("Steam Web API Key")
             } footer: {
-                Text("Required to load your game library. Stored securely in Keychain — never transmitted except directly to Steam's own servers.")
-                    .font(.caption)
-            }
-
-            Section {
-                VMCredentialsSection()
-            } header: {
-                Text("Steam Login for Game Downloads")
-            } footer: {
-                Text("Required to install games. Meridian uses these credentials to download games inside the VM. Stored securely in Keychain.")
+                Text("Required to load your game library. Stored securely in Keychain.")
                     .font(.caption)
             }
         }
@@ -129,7 +115,6 @@ private struct SteamSettingsTab: View {
                 steamID: steamAuth.steamID, apiKey: key
             )
             steamAuth.apiKey = key
-            // Refresh displayed profile now that the key is valid
             await steamAuth.refreshProfile(steamID: steamAuth.steamID)
             validationSuccess = true
             validationMessage = "Key verified — library will refresh automatically."
@@ -140,172 +125,92 @@ private struct SteamSettingsTab: View {
     }
 }
 
-// MARK: - VM Credentials Section
+// MARK: - Engine tab
 
-private struct VMCredentialsSection: View {
-    @Environment(SteamAuthService.self) private var steamAuth
-    @State private var username: String = ""
-    @State private var password: String = ""
-    @State private var saved = false
-
-    private var hasCreds: Bool { !steamAuth.vmUsername.isEmpty && !steamAuth.vmPassword.isEmpty }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if !hasCreds && !saved {
-                Label("Steam credentials required to install games",
-                      systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            }
-
-            TextField("Steam username", text: $username)
-                .textFieldStyle(.roundedBorder)
-
-            SecureField("Steam password", text: $password)
-                .textFieldStyle(.roundedBorder)
-
-            HStack {
-                Spacer()
-                Button("Save Credentials") {
-                    steamAuth.vmUsername = username
-                    steamAuth.vmPassword = password
-                    saved = true
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) { saved = false }
-                }
-                .buttonStyle(.bordered)
-                .disabled(username.isEmpty || password.isEmpty)
-            }
-
-            if saved {
-                Label("Saved to Keychain.", systemImage: "checkmark.circle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.green)
-            }
-        }
-        .onAppear {
-            username = steamAuth.vmUsername
-            password = steamAuth.vmPassword
-        }
-    }
-}
-
-// MARK: - VM tab
-
-private struct VMSettingsTab: View {
-    @Environment(VMManager.self) private var vmManager
+private struct EngineSettingsTab: View {
+    @Environment(WineEngine.self) private var engine
     private let settings = AppSettings.shared
-    @State private var cpuCount: Double = 0
-    @State private var memGiB: Double = 4
-    @State private var diskGiB: Double = 64
 
     var body: some View {
         Form {
-            Section("Resources") {
-                VStack(alignment: .leading, spacing: 4) {
-                    LabeledContent("CPU Cores: \(Int(cpuCount))") {
-                        Slider(value: $cpuCount,
-                               in: 1...Double(ProcessInfo.processInfo.processorCount),
-                               step: 1)
-                    }
-                    Text("Host has \(ProcessInfo.processInfo.processorCount) cores")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-
-                VStack(alignment: .leading, spacing: 4) {
-                    LabeledContent("Memory: \(Int(memGiB)) GB") {
-                        Slider(value: $memGiB, in: 2...Double(maxRAMGiB()), step: 2)
-                    }
-                    Text("System has \(hostRAMGiB()) GB total")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-
-                LabeledContent("Game Disk: \(Int(diskGiB)) GB") {
-                    Slider(value: $diskGiB, in: 16...512, step: 16)
-                }
+            Section("Runtime") {
+                EngineStatusRow(engine: engine)
             }
 
-            Section("Behaviour") {
-                Toggle("Keep VM running between sessions", isOn: Binding(
-                    get: { settings.keepVMRunning },
-                    set: { settings.keepVMRunning = $0 }
+            Section("Display") {
+                Toggle("Metal Performance HUD", isOn: Binding(
+                    get: { settings.metalHUD },
+                    set: { settings.metalHUD = $0 }
                 ))
-                Text("Speeds up subsequent game launches but uses more memory.")
+                Text("Shows GPU frame rate and statistics overlay during gameplay.")
                     .font(.caption).foregroundStyle(.secondary)
-            }
 
-            Section("Image") {
-                VMImageStatusRow(vmManager: vmManager)
-            }
-        }
-        .formStyle(.grouped)
-        .onAppear {
-            cpuCount = Double(settings.vmCPUCount)
-            memGiB   = Double(settings.vmMemoryGiB)
-            diskGiB  = Double(settings.vmDiskGiB)
-        }
-        .onChange(of: cpuCount) { settings.vmCPUCount  = Int(cpuCount) }
-        .onChange(of: memGiB)   { settings.vmMemoryGiB = Int(memGiB)   }
-        .onChange(of: diskGiB)  { settings.vmDiskGiB   = Int(diskGiB)  }
-    }
+                Toggle("Force Virtual Desktop", isOn: Binding(
+                    get: { settings.useVirtualDesktop },
+                    set: { settings.useVirtualDesktop = $0 }
+                ))
+                Text("Run games inside a Wine virtual desktop at a fixed resolution instead of native windowed mode.")
+                    .font(.caption).foregroundStyle(.secondary)
 
-    private func hostRAMGiB() -> Int { Int(ProcessInfo.processInfo.physicalMemory / 1_073_741_824) }
-    private func maxRAMGiB() -> Int  { max(4, hostRAMGiB() - 4) }
-}
-
-// MARK: - Image status row
-
-private struct VMImageStatusRow: View {
-    let vmManager: VMManager
-    @State private var isChecking = false
-
-    var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(vmManager.imageProvider.isImageReady ? "Meridian Base Image" : "No image installed")
-                    .fontWeight(.medium)
-                if let tag = vmManager.imageProvider.cachedTag {
-                    Text("Version: \(tag)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            Spacer()
-            if isChecking {
-                ProgressView().scaleEffect(0.8)
-            } else {
-                Button("Check for Update") {
-                    isChecking = true
-                    Task {
-                        let _ = await vmManager.imageProvider.checkForUpdate()
-                        isChecking = false
+                if settings.useVirtualDesktop {
+                    HStack {
+                        TextField("Width", value: Binding(
+                            get: { settings.virtualDesktopWidth },
+                            set: { settings.virtualDesktopWidth = $0 }
+                        ), format: .number)
+                        .frame(width: 80)
+                        Text("x")
+                        TextField("Height", value: Binding(
+                            get: { settings.virtualDesktopHeight },
+                            set: { settings.virtualDesktopHeight = $0 }
+                        ), format: .number)
+                        .frame(width: 80)
                     }
+                    .textFieldStyle(.roundedBorder)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
             }
-        }
-    }
-}
 
-// MARK: - Advanced tab
-
-private struct AdvancedSettingsTab: View {
-    private let settings = AppSettings.shared
-
-    var body: some View {
-        Form {
-            Section("Image Repository") {
-                TextField("GitHub repo slug", text: Binding(
-                    get: { settings.imageRepoSlug },
-                    set: { settings.imageRepoSlug = $0 }
+            Section("Advanced") {
+                TextField("Engine repo slug", text: Binding(
+                    get: { settings.engineRepoSlug },
+                    set: { settings.engineRepoSlug = $0 }
                 ))
                 .textFieldStyle(.roundedBorder)
-                Text("Format: owner/repo. Change this to use your own fork or self-hosted images.")
+                Text("Format: owner/repo. GitHub repository for Wine+GPTK runtime releases.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+// MARK: - Engine status row
+
+private struct EngineStatusRow: View {
+    let engine: WineEngine
+
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(engine.isReady ? "Wine Runtime" : "Not detected")
+                    .fontWeight(.medium)
+                if engine.isReady {
+                    Text("Backend: \(engine.backendName)")
+                        .font(.caption)
+                        .foregroundStyle(.green)
+                } else {
+                    Text("Install CrossOver from codeweavers.com")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            Button("Re-detect") {
+                engine.detect()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
     }
 }
