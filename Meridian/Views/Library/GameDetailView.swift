@@ -52,43 +52,39 @@ struct GameDetailView: View {
     // MARK: - Hero
 
     private var heroSection: some View {
-        ZStack(alignment: .bottomLeading) {
-            heroImage
-                .frame(maxWidth: .infinity)
-                .frame(height: 240)
-                .clipped()
-
-            LinearGradient(
-                colors: [.clear, .black.opacity(0.65)],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .frame(height: 120)
+        heroImage
             .frame(maxWidth: .infinity)
-            .allowsHitTesting(false)
+            .frame(height: 260)
+            .clipped()
+            .overlay(alignment: .bottomLeading) {
+                LinearGradient(
+                    colors: [.clear, .black.opacity(0.7)],
+                    startPoint: .init(x: 0.5, y: 0.3),
+                    endPoint: .bottom
+                )
+                .allowsHitTesting(false)
+            }
+            .overlay(alignment: .bottomLeading) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(currentGame.name)
+                        .font(.title2)
+                        .fontWeight(.bold)
+                        .foregroundStyle(.white)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .shadow(color: .black.opacity(0.5), radius: 6, x: 0, y: 2)
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(currentGame.name)
-                    .font(.title)
-                    .fontWeight(.bold)
-                    .foregroundStyle(.white)
-                    .lineLimit(2)
-                    .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 1)
-
-                HStack(spacing: 8) {
-                    if currentGame.playtimeMinutes > 0 {
-                        Text(currentGame.playtimeFormatted + " played")
-                            .font(.subheadline)
-                            .foregroundStyle(.white.opacity(0.8))
-                    }
-                    if currentGame.windowsOnly {
-                        WindowsBadge()
+                    HStack(spacing: 8) {
+                        if currentGame.playtimeMinutes > 0 {
+                            Text(currentGame.playtimeFormatted + " played")
+                                .font(.subheadline)
+                                .foregroundStyle(.white.opacity(0.85))
+                        }
                     }
                 }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 18)
             }
-            .padding(.horizontal, 20)
-            .padding(.bottom, 16)
-        }
     }
 
     @ViewBuilder
@@ -134,7 +130,18 @@ struct GameDetailView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .center, spacing: 12) {
                 playButton
+
                 Spacer()
+
+                Button {
+                    library.toggleFavorite(appID: currentGame.id)
+                } label: {
+                    Image(systemName: library.isFavorite(appID: currentGame.id) ? "heart.fill" : "heart")
+                        .foregroundStyle(library.isFavorite(appID: currentGame.id) ? .pink : .secondary)
+                        .font(.title3)
+                }
+                .buttonStyle(.borderless)
+                .help(library.isFavorite(appID: currentGame.id) ? "Remove from Favorites" : "Add to Favorites")
             }
             if isActivePhase {
                 StatusCard(launcher: launcher, openWindow: openWindow)

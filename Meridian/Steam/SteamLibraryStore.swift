@@ -25,10 +25,10 @@ final class SteamLibraryStore {
         var result = games
 
         switch filter {
-        case .all:      break
-        case .recent:   result = recentGames
+        case .all:       break
+        case .recent:    result = recentGames
         case .installed: result = result.filter { $0.isInstalled }
-        case .windows:  result = result.filter { $0.windowsOnly }
+        case .favorites: result = result.filter { settings.isFavorite(appID: $0.id) }
         }
 
         if !searchQuery.isEmpty {
@@ -120,7 +120,16 @@ final class SteamLibraryStore {
         case all       = "All Games"
         case recent    = "Recent"
         case installed = "Installed"
-        case windows   = "Windows Games"
+        case favorites = "Favorites"
         var id: String { rawValue }
+    }
+
+    func isFavorite(appID: Int) -> Bool {
+        settings.isFavorite(appID: appID)
+    }
+
+    func toggleFavorite(appID: Int) {
+        log.info("[toggleFavorite] appID=\(appID)")
+        settings.toggleFavorite(appID: appID)
     }
 }

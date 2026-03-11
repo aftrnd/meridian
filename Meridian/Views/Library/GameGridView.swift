@@ -3,6 +3,7 @@ import SwiftUI
 struct GameGridView: View {
     let game: Game
     let isSelected: Bool
+    var isFavorite: Bool = false
 
     @State private var isHovered = false
 
@@ -48,6 +49,16 @@ struct GameGridView: View {
         .aspectRatio(460.0 / 215.0, contentMode: .fit)
         .frame(maxWidth: .infinity)
         .clipped()
+        .overlay(alignment: .topTrailing) {
+            if isFavorite {
+                Image(systemName: "heart.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.white)
+                    .padding(5)
+                    .background(.pink.opacity(0.85), in: Circle())
+                    .padding(6)
+            }
+        }
         .clipShape(UnevenRoundedRectangle(topLeadingRadius: 12, topTrailingRadius: 12))
     }
 
@@ -104,8 +115,8 @@ struct WindowsBadge: View {
 
 #Preview {
     HStack {
-        GameGridView(game: Game.previews[0], isSelected: false)
-        GameGridView(game: Game.previews[2], isSelected: true)
+        GameGridView(game: Game.previews[0], isSelected: false, isFavorite: true)
+        GameGridView(game: Game.previews[2], isSelected: true, isFavorite: false)
     }
     .padding()
     .frame(width: 440)

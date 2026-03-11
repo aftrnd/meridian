@@ -114,7 +114,7 @@ private struct SidebarView: View {
         case .all:       return "square.grid.2x2"
         case .recent:    return "clock"
         case .installed: return "internaldrive"
-        case .windows:   return "desktopcomputer"
+        case .favorites: return "heart.fill"
         }
     }
 }

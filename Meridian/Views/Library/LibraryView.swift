@@ -72,8 +72,24 @@ struct LibraryView: View {
         ScrollView {
             LazyVGrid(columns: columns, spacing: 14) {
                 ForEach(library.filteredGames) { game in
-                    GameGridView(game: game, isSelected: selectedGame?.id == game.id)
+                    GameGridView(game: game, isSelected: selectedGame?.id == game.id, isFavorite: library.isFavorite(appID: game.id))
                         .onTapGesture { selectedGame = game }
+                        .contextMenu {
+                            Button {
+                                library.toggleFavorite(appID: game.id)
+                            } label: {
+                                Label(
+                                    library.isFavorite(appID: game.id) ? "Remove from Favorites" : "Add to Favorites",
+                                    systemImage: library.isFavorite(appID: game.id) ? "heart.slash" : "heart"
+                                )
+                            }
+                            Divider()
+                            Button {
+                                selectedGame = game
+                            } label: {
+                                Label("View Details", systemImage: "info.circle")
+                            }
+                        }
                 }
             }
             .padding(16)

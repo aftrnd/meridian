@@ -62,6 +62,27 @@ final class AppSettings: @unchecked Sendable {
         installedAppIDs = ids
     }
 
+    // MARK: - Favorites
+
+    var favoriteAppIDs: Set<Int> {
+        get { Set(UserDefaults.standard.array(forKey: "favoriteAppIDs") as? [Int] ?? []) }
+        set { UserDefaults.standard.set(Array(newValue), forKey: "favoriteAppIDs") }
+    }
+
+    func isFavorite(appID: Int) -> Bool {
+        favoriteAppIDs.contains(appID)
+    }
+
+    func toggleFavorite(appID: Int) {
+        var ids = favoriteAppIDs
+        if ids.contains(appID) {
+            ids.remove(appID)
+        } else {
+            ids.insert(appID)
+        }
+        favoriteAppIDs = ids
+    }
+
     private init() {}
 }
 
