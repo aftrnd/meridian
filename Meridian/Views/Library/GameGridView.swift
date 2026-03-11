@@ -4,8 +4,10 @@ struct GameGridView: View {
     let game: Game
     let isSelected: Bool
     var isFavorite: Bool = false
+    var isRunning: Bool = false
 
     @State private var isHovered = false
+    @State private var runningPulse = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -14,24 +16,44 @@ struct GameGridView: View {
         }
         .background(
             RoundedRectangle(cornerRadius: 12)
-                .fill(isSelected ? Color.accentColor.opacity(0.1) : Color.clear)
+                .fill(isRunning
+                    ? Color.green.opacity(0.08)
+                    : (isSelected ? Color.accentColor.opacity(0.1) : Color.clear))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 12)
                 .strokeBorder(
-                    isSelected
-                        ? Color.accentColor
-                        : (isHovered ? Color.primary.opacity(0.12) : Color.clear),
-                    lineWidth: isSelected ? 1.5 : 1
+                    isRunning
+                        ? Color.green.opacity(runningPulse ? 0.9 : 0.5)
+                        : (isSelected
+                            ? Color.accentColor
+                            : (isHovered ? Color.primary.opacity(0.12) : Color.clear)),
+                    lineWidth: isRunning ? 1.5 : (isSelected ? 1.5 : 1)
                 )
         )
         .animation(.easeOut(duration: 0.15), value: isHovered)
         .onHover { isHovered = $0 }
         .contentShape(Rectangle())
+        .onAppear {
+            if isRunning {
+                withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) {
+                    runningPulse = true
+                }
+            }
+        }
+        .onChange(of: isRunning) { _, running in
+            if running {
+                withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) {
+                    runningPulse = true
+                }
+            } else {
+                runningPulse = false
+            }
+        }
     }
 
     private var artSection: some View {
-        CachedAsyncImage(url: game.capsuleURL) { phase in
+        CachedAsyncImage(url: game.capsuleURL, fallbacks: game.capsuleURLFallbacks) { phase in
             switch phase {
             case .success(let image):
                 image
@@ -50,13 +72,31 @@ struct GameGridView: View {
         .frame(maxWidth: .infinity)
         .clipped()
         .overlay(alignment: .topTrailing) {
-            if isFavorite {
-                Image(systemName: "heart.fill")
-                    .font(.caption2)
-                    .foregroundStyle(.white)
-                    .padding(5)
-                    .background(.pink.opacity(0.85), in: Circle())
+            HStack(spacing: 4) {
+                if isRunning {
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(.green)
+                            .frame(width: 6, height: 6)
+                            .scaleEffect(runningPulse ? 1.3 : 0.8)
+                        Text("Now Playing")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(.white)
+                    }
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 4)
+                    .background(.black.opacity(0.6), in: Capsule())
                     .padding(6)
+                }
+
+                if isFavorite {
+                    Image(systemName: "heart.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.white)
+                        .padding(5)
+                        .background(.pink.opacity(0.85), in: Circle())
+                        .padding(6)
+                }
             }
         }
         .clipShape(UnevenRoundedRectangle(topLeadingRadius: 12, topTrailingRadius: 12))

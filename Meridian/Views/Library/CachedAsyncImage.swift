@@ -4,8 +4,10 @@ import AppKit
 /// An AsyncImage replacement that caches images in memory via NSCache.
 /// Prevents images from re-fetching when SwiftUI rebuilds views
 /// (e.g., switching tabs, scrolling offscreen).
+/// Supports fallback URLs when the primary CDN fails.
 struct CachedAsyncImage<Content: View>: View {
     let url: URL?
+    var fallbacks: [URL] = []
     @ViewBuilder let content: (AsyncImagePhase) -> Content
 
     @State private var phase: AsyncImagePhase = .empty
@@ -18,31 +20,35 @@ struct CachedAsyncImage<Content: View>: View {
     }
 
     private func loadImage() async {
-        guard let url else {
+        let urlsToTry = [url].compactMap { $0 } + fallbacks
+        guard !urlsToTry.isEmpty else {
             phase = .empty
             return
         }
 
-        if let cached = ImageCache.shared.image(for: url) {
-            phase = .success(Image(nsImage: cached))
-            return
-        }
-
-        do {
-            let (data, _) = try await URLSession.shared.data(from: url)
-            guard let nsImage = NSImage(data: data) else {
-                phase = .failure(ImageError.invalidData)
+        for tryURL in urlsToTry {
+            if let cached = ImageCache.shared.image(for: tryURL) {
+                phase = .success(Image(nsImage: cached))
                 return
             }
-            ImageCache.shared.store(nsImage, for: url)
-            phase = .success(Image(nsImage: nsImage))
-        } catch {
-            phase = .failure(error)
+
+            do {
+                let (data, response) = try await URLSession.shared.data(from: tryURL)
+                if let http = response as? HTTPURLResponse, http.statusCode != 200 { continue }
+                guard let nsImage = NSImage(data: data) else { continue }
+                ImageCache.shared.store(nsImage, for: tryURL)
+                phase = .success(Image(nsImage: nsImage))
+                return
+            } catch {
+                continue
+            }
         }
+        phase = .failure(ImageError.allURLsFailed)
     }
 
     private enum ImageError: Error {
         case invalidData
+        case allURLsFailed
     }
 }
 

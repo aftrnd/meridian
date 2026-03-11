@@ -67,6 +67,7 @@ final class SteamAuthService: NSObject {
     /// bypassed. On macOS 26, NSApp.keyWindow has dispatch_assert_queue(main) so
     /// it must not be accessed from a background thread. We capture the window
     /// up-front on the main actor and return it from the nonisolated delegate method.
+    @ObservationIgnored
     nonisolated(unsafe) private var capturedPresentationWindow: ASPresentationAnchor?
 
     // MARK: - Keychain keys

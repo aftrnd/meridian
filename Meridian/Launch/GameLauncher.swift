@@ -25,6 +25,7 @@ final class GameLauncher {
         case bootstrappingSteam
         case launching
         case running(appID: Int)
+        case stopping(appID: Int)
         case exited(appID: Int)
         case failed(String)
     }
@@ -32,6 +33,15 @@ final class GameLauncher {
     private(set) var launchState: LaunchState = .idle
     private(set) var logs: [String] = []
     private(set) var currentActivity: String?
+    /// When the full pipeline started — used by the UI to show elapsed time during prep/launch.
+    private(set) var pipelineStartDate: Date?
+    /// When we transitioned to .running.
+    private(set) var runningSince: Date?
+    /// The appID currently being launched or running. Nil when idle/exited/failed.
+    /// Lets per-game detail views correctly gate active UI to only the game being played.
+    private(set) var activeAppID: Int?
+    /// True once the monitor loop has confirmed live Wine processes exist after launch.
+    var processesConfirmed: Bool { gameProcess.confirmedRunning }
 
     private let gameProcess = GameProcess()
     private let prefix = WinePrefix.defaultPrefix
@@ -46,13 +56,26 @@ final class GameLauncher {
         sessionBridge: SteamSessionBridge,
         library: SteamLibraryStore? = nil
     ) {
+        // Must be async for stopGame; run in Task if called from sync context
+        Task {
+            await launchImpl(game: game, engine: engine, steamManager: steamManager, sessionBridge: sessionBridge, library: library)
+        }
+    }
+
+    private func launchImpl(
+        game: Game,
+        engine: WineEngine,
+        steamManager: WineSteamManager,
+        sessionBridge: SteamSessionBridge,
+        library: SteamLibraryStore?
+    ) async {
         switch launchState {
-        case .preparingEngine, .preparingPrefix, .bootstrappingSteam, .launching:
+        case .preparingEngine, .preparingPrefix, .bootstrappingSteam, .launching, .stopping:
             log.warning("[launch] ignoring — already in state \(String(describing: self.launchState))")
             return
         case .running:
             log.info("[launch] currently in .running — stopping previous session before re-launch")
-            gameProcess.stopGame(engine: engine, prefix: prefix)
+            await gameProcess.stopGame(engine: engine, prefix: prefix)
         case .idle, .exited, .failed:
             break
         }
@@ -78,6 +101,9 @@ final class GameLauncher {
         await cleanupProcesses(engine: engine, steamManager: steamManager)
 
         launchState = .idle
+        runningSince = nil
+        pipelineStartDate = nil
+        activeAppID = nil
         currentActivity = nil
         appendLog("Launch cancelled by user")
     }
@@ -89,8 +115,14 @@ final class GameLauncher {
             return
         }
         log.info("[stopGame] stopping appID=\(appID)")
-        gameProcess.stopGame(engine: engine, prefix: prefix)
+        launchState = .stopping(appID: appID)
+        currentActivity = "Stopping game..."
+        await gameProcess.stopGame(engine: engine, prefix: prefix)
+        runningSince = nil
+        pipelineStartDate = nil
         launchState = .exited(appID: appID)
+        currentActivity = nil
+        log.info("[stopGame] exited appID=\(appID)")
     }
 
     /// Kills all Wine processes. Call on app termination or prefix reset.
@@ -98,6 +130,9 @@ final class GameLauncher {
         log.info("[cleanup] killing all Wine processes")
         steamManager.killAll(engine: engine, prefix: prefix)
         launchState = .idle
+        activeAppID = nil
+        pipelineStartDate = nil
+        runningSince = nil
         currentActivity = nil
     }
 
@@ -112,6 +147,8 @@ final class GameLauncher {
     ) async {
         logs.removeAll()
         currentActivity = nil
+        activeAppID = game.id
+        pipelineStartDate = .now
 
         log.info("╔══════════════════════════════════════════════════")
         log.info("║ LAUNCH: appID=\(game.id) '\(game.name)'")
@@ -229,18 +266,25 @@ final class GameLauncher {
 
         // 7. Monitor Wine processes for game exit.
         launchState = .running(appID: game.id)
+        runningSince = .now
         currentActivity = nil
         appendLog("Game is running")
         library?.setInstalled(true, for: game.id)
         log.info("[launch] state=RUNNING appID=\(game.id) | monitoring pid=\(launchedPID)")
 
         gameProcess.startMonitoring(appID: game.id, launchedPID: launchedPID, engine: engine, prefix: prefix)
+        appendLog("Waiting for game window to appear…")
 
+        var monitorConfirmed = false
         while gameProcess.isRunning {
             if Task.isCancelled {
                 log.info("[launch] task cancelled during monitoring — stopping game")
-                gameProcess.stopGame(engine: engine, prefix: prefix)
+                await gameProcess.stopGame(engine: engine, prefix: prefix)
                 break
+            }
+            if gameProcess.confirmedRunning && !monitorConfirmed {
+                monitorConfirmed = true
+                appendLog("Game confirmed running")
             }
             try? await Task.sleep(for: .seconds(2))
         }
@@ -252,7 +296,12 @@ final class GameLauncher {
 
         appendLog("Game session ended")
         launchState = .exited(appID: game.id)
+        runningSince = nil
+        pipelineStartDate = nil
         currentActivity = nil
+        // Keep activeAppID set to the exited game so the detail view can show
+        // the final "Play again" state scoped to the correct game. It is cleared
+        // on the next launch or explicit cleanup.
         log.info("[launch] state=EXITED appID=\(game.id)")
     }
 
@@ -266,6 +315,8 @@ final class GameLauncher {
 
     private func fail(_ message: String, error: Error? = nil) {
         launchState = .failed(message)
+        runningSince = nil
+        pipelineStartDate = nil
         currentActivity = nil
         appendLog("FAILED: \(message)")
         if let error {

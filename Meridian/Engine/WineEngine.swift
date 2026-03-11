@@ -129,7 +129,7 @@ final class WineEngine {
             let dxvk = "\(Self.crossOverLib)/dxvk"
             if fm.fileExists(atPath: dxvk) { dxvkPath = dxvk }
 
-            backendName = "CrossOver"
+            backendName = "Wine"
             state = .ready
 
             log.info("[detect] CrossOver found (fallback)")

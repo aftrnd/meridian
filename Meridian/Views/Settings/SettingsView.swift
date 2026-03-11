@@ -130,11 +130,17 @@ private struct SteamSettingsTab: View {
 private struct EngineSettingsTab: View {
     @Environment(WineEngine.self) private var engine
     private let settings = AppSettings.shared
+    @State private var showAdvanced = false
 
     var body: some View {
         Form {
-            Section("Runtime") {
+            Section {
                 EngineStatusRow(engine: engine)
+            } header: {
+                Text("Runtime")
+            } footer: {
+                Text("Open-source components: Wine (LGPL), DXMT, MoltenVK. No third-party apps required.")
+                    .font(.caption)
             }
 
             Section("Display") {
@@ -170,15 +176,20 @@ private struct EngineSettingsTab: View {
                 }
             }
 
-            Section("Advanced") {
-                TextField("Engine repo slug", text: Binding(
-                    get: { settings.engineRepoSlug },
-                    set: { settings.engineRepoSlug = $0 }
-                ))
-                .textFieldStyle(.roundedBorder)
-                Text("Format: owner/repo. GitHub repository for Wine+GPTK runtime releases.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            Section {
+                DisclosureGroup("Advanced", isExpanded: $showAdvanced) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        TextField("Engine repo slug", text: Binding(
+                            get: { settings.engineRepoSlug },
+                            set: { settings.engineRepoSlug = $0 }
+                        ))
+                        .textFieldStyle(.roundedBorder)
+                        Text("Format: owner/repo. GitHub repository for Wine runtime releases.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.top, 4)
+                }
             }
         }
         .formStyle(.grouped)
