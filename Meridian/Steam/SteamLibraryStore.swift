@@ -19,14 +19,25 @@ final class SteamLibraryStore {
     var filter: LibraryFilter = .all
     private let settings = AppSettings.shared
 
+    // Stored so @Observable can track changes and re-evaluate filteredGames immediately.
+    // AppSettings persists to UserDefaults; this mirrors it for reactive updates.
+    private(set) var hiddenAppIDs: Set<Int> = AppSettings.shared.hiddenAppIDs
+    var showHiddenGames: Bool = AppSettings.shared.showHiddenGames {
+        didSet { settings.showHiddenGames = showHiddenGames }
+    }
+
     // MARK: - Computed filtered / sorted view
 
     var filteredGames: [Game] {
         var result = games
 
+        if !showHiddenGames {
+            result = result.filter { !hiddenAppIDs.contains($0.id) }
+        }
+
         switch filter {
         case .all:       break
-        case .recent:    result = recentGames
+        case .recent:    result = recentGames.filter { showHiddenGames || !hiddenAppIDs.contains($0.id) }
         case .installed: result = result.filter { $0.isInstalled }
         case .favorites: result = result.filter { settings.isFavorite(appID: $0.id) }
         }
@@ -149,5 +160,21 @@ final class SteamLibraryStore {
     func toggleFavorite(appID: Int) {
         log.info("[toggleFavorite] appID=\(appID)")
         settings.toggleFavorite(appID: appID)
+    }
+
+    func isHidden(appID: Int) -> Bool {
+        hiddenAppIDs.contains(appID)
+    }
+
+    func hideGame(appID: Int) {
+        log.info("[hideGame] appID=\(appID)")
+        settings.hideGame(appID: appID)
+        hiddenAppIDs = settings.hiddenAppIDs
+    }
+
+    func unhideGame(appID: Int) {
+        log.info("[unhideGame] appID=\(appID)")
+        settings.unhideGame(appID: appID)
+        hiddenAppIDs = settings.hiddenAppIDs
     }
 }

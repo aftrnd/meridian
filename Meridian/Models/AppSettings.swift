@@ -62,6 +62,34 @@ final class AppSettings: @unchecked Sendable {
         installedAppIDs = ids
     }
 
+    // MARK: - Hidden Games
+
+    var hiddenAppIDs: Set<Int> {
+        get { Set(UserDefaults.standard.array(forKey: "hiddenAppIDs") as? [Int] ?? []) }
+        set { UserDefaults.standard.set(Array(newValue), forKey: "hiddenAppIDs") }
+    }
+
+    var showHiddenGames: Bool {
+        get { UserDefaults.standard.bool(forKey: "showHiddenGames") }
+        set { UserDefaults.standard.set(newValue, forKey: "showHiddenGames") }
+    }
+
+    func isHidden(appID: Int) -> Bool {
+        hiddenAppIDs.contains(appID)
+    }
+
+    func hideGame(appID: Int) {
+        var ids = hiddenAppIDs
+        ids.insert(appID)
+        hiddenAppIDs = ids
+    }
+
+    func unhideGame(appID: Int) {
+        var ids = hiddenAppIDs
+        ids.remove(appID)
+        hiddenAppIDs = ids
+    }
+
     // MARK: - Favorites
 
     var favoriteAppIDs: Set<Int> {

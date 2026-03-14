@@ -41,7 +41,8 @@ final class GameLauncher {
     /// Lets per-game detail views correctly gate active UI to only the game being played.
     private(set) var activeAppID: Int?
     /// True once the monitor loop has confirmed live Wine processes exist after launch.
-    var processesConfirmed: Bool { gameProcess.confirmedRunning }
+    /// Stored (not computed) so SwiftUI @Observable tracks it directly.
+    private(set) var processesConfirmed: Bool = false
 
     private let gameProcess = GameProcess()
     private let prefix = WinePrefix.defaultPrefix
@@ -105,6 +106,7 @@ final class GameLauncher {
         pipelineStartDate = nil
         activeAppID = nil
         currentActivity = nil
+        processesConfirmed = false
         appendLog("Launch cancelled by user")
     }
 
@@ -120,6 +122,7 @@ final class GameLauncher {
         await gameProcess.stopGame(engine: engine, prefix: prefix)
         runningSince = nil
         pipelineStartDate = nil
+        processesConfirmed = false
         launchState = .exited(appID: appID)
         currentActivity = nil
         log.info("[stopGame] exited appID=\(appID)")
@@ -134,6 +137,7 @@ final class GameLauncher {
         pipelineStartDate = nil
         runningSince = nil
         currentActivity = nil
+        processesConfirmed = false
     }
 
     // MARK: - Launch Pipeline
@@ -149,6 +153,7 @@ final class GameLauncher {
         currentActivity = nil
         activeAppID = game.id
         pipelineStartDate = .now
+        processesConfirmed = false
 
         log.info("╔══════════════════════════════════════════════════")
         log.info("║ LAUNCH: appID=\(game.id) '\(game.name)'")
@@ -288,6 +293,11 @@ final class GameLauncher {
                 await gameProcess.stopGame(engine: engine, prefix: prefix)
                 break
             }
+            // Sync confirmed state from GameProcess into our stored property
+            // so SwiftUI views that read processesConfirmed re-render.
+            if !processesConfirmed && gameProcess.confirmedRunning {
+                processesConfirmed = true
+            }
             try? await Task.sleep(for: .seconds(1))
         }
 
@@ -301,6 +311,7 @@ final class GameLauncher {
         runningSince = nil
         pipelineStartDate = nil
         currentActivity = nil
+        processesConfirmed = false
         // Keep activeAppID set to the exited game so the detail view can show
         // the final "Play again" state scoped to the correct game. It is cleared
         // on the next launch or explicit cleanup.

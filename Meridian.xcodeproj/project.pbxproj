@@ -34,6 +34,8 @@
 		B00E0020 /* CachedAsyncImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00E0021 /* CachedAsyncImage.swift */; };
 		B00E0030 /* EngineDownloader.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00E0031 /* EngineDownloader.swift */; };
 		B00E0040 /* TerminationCleanup.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00E0041 /* TerminationCleanup.swift */; };
+		B00E0050 /* SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00E0051 /* SearchView.swift */; };
+		B00E0060 /* SteamWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00E0061 /* SteamWebView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -68,6 +70,8 @@
 		B00E0021 /* CachedAsyncImage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CachedAsyncImage.swift; sourceTree = "<group>"; };
 		B00E0031 /* EngineDownloader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineDownloader.swift; sourceTree = "<group>"; };
 		B00E0041 /* TerminationCleanup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminationCleanup.swift; sourceTree = "<group>"; };
+		B00E0051 /* SearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchView.swift; sourceTree = "<group>"; };
+		B00E0061 /* SteamWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SteamWebView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -175,6 +179,8 @@
 			isa = PBXGroup;
 			children = (
 				B0010027 /* LibraryView.swift */,
+				B00E0051 /* SearchView.swift */,
+				B00E0061 /* SteamWebView.swift */,
 				B0010029 /* GameGridView.swift */,
 				B001002B /* GameDetailView.swift */,
 				B00E0021 /* CachedAsyncImage.swift */,
@@ -321,6 +327,8 @@
 				B0010035A /* AppDetails.swift in Sources */,
 				B00E0030 /* EngineDownloader.swift in Sources */,
 				B00E0040 /* TerminationCleanup.swift in Sources */,
+				B00E0050 /* SearchView.swift in Sources */,
+				B00E0060 /* SteamWebView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

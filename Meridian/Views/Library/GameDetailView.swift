@@ -15,23 +15,26 @@ struct GameDetailView: View {
 
     @State private var showEngineSetup = false
     @State private var showResetConfirm = false
+    @State private var showInfoPopover = false
+    @State private var appDetails: AppDetails? = nil
 
     var body: some View {
         VStack(spacing: 0) {
-            heroArt
-            titleHeader
-            Divider()
+            heroBanner
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 12) {
                     launchSection
-                    infoSection
+                    statsSection
                 }
                 .padding(20)
             }
             Divider()
             footerBar
         }
-        .frame(minWidth: 520, minHeight: 480)
+        .frame(minWidth: 520, minHeight: 520)
+        .task(id: game.id) {
+            appDetails = try? await SteamAPIService.shared.fetchAppDetails(appID: game.id)
+        }
         .sheet(isPresented: $showEngineSetup) {
             EngineSetupView().environment(engine)
         }
@@ -48,25 +51,86 @@ struct GameDetailView: View {
         }
     }
 
-    // MARK: - Art banner
+    // MARK: - Hero Banner (art + overlaid title)
 
-    private var heroArt: some View {
+    private var heroBanner: some View {
+        Color.black
+            .frame(maxWidth: .infinity)
+            .frame(height: 260)
+            .overlay {
+                heroArtImage
+            }
+            .clipped()
+            .overlay {
+                LinearGradient(
+                    colors: [.clear, .black.opacity(0.7)],
+                    startPoint: .init(x: 0.5, y: 0.3),
+                    endPoint: .bottom
+                )
+                .allowsHitTesting(false)
+            }
+            .overlay(alignment: .bottomLeading) {
+                HStack(alignment: .bottom, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(currentGame.name)
+                            .font(.title)
+                            .fontWeight(.bold)
+                            .foregroundStyle(.white)
+                            .lineLimit(2)
+                            .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
+
+                        if currentGame.playtimeMinutes > 0 {
+                            Text(currentGame.playtimeFormatted + " played")
+                                .font(.subheadline)
+                                .foregroundStyle(.white.opacity(0.8))
+                        }
+                    }
+
+                    Spacer(minLength: 0)
+
+                    HStack(spacing: 8) {
+                        Button {
+                            library.toggleFavorite(appID: currentGame.id)
+                        } label: {
+                            Image(systemName: library.isFavorite(appID: currentGame.id) ? "heart.fill" : "heart")
+                                .font(.title3)
+                                .foregroundStyle(library.isFavorite(appID: currentGame.id) ? .pink : .white.opacity(0.8))
+                        }
+                        .buttonStyle(.borderless)
+                        .help(library.isFavorite(appID: currentGame.id) ? "Remove from Favorites" : "Add to Favorites")
+
+                        Button { showInfoPopover.toggle() } label: {
+                            Image(systemName: "info.circle")
+                                .font(.title3)
+                                .foregroundStyle(.white.opacity(0.8))
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Game info and logs")
+                        .popover(isPresented: $showInfoPopover, arrowEdge: .bottom) {
+                            infoPopoverContent
+                        }
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 16)
+            }
+    }
+
+    @ViewBuilder
+    private var heroArtImage: some View {
         CachedAsyncImage(url: game.heroURL, fallbacks: game.heroURLFallbacks) { phase in
             switch phase {
             case .success(let image):
                 image
                     .resizable()
                     .aspectRatio(contentMode: .fill)
-                    .transition(.opacity.animation(.easeIn(duration: 0.25)))
             case .failure:
-                // Hero not available — fall back to capsule art
                 CachedAsyncImage(url: game.capsuleURL, fallbacks: game.capsuleURLFallbacks) { capsulePhase in
                     switch capsulePhase {
                     case .success(let image):
                         image
                             .resizable()
                             .aspectRatio(contentMode: .fill)
-                            .transition(.opacity.animation(.easeIn(duration: 0.25)))
                     case .empty:
                         artShimmer
                     default:
@@ -79,17 +143,12 @@ struct GameDetailView: View {
                 artPlaceholder
             }
         }
-        .frame(maxWidth: .infinity)
-        .frame(height: 220)
-        .clipped()
     }
 
     private var artShimmer: some View {
         Rectangle()
             .fill(.quaternary)
-            .overlay {
-                ShimmerView()
-            }
+            .overlay { ShimmerView() }
     }
 
     private var artPlaceholder: some View {
@@ -102,44 +161,66 @@ struct GameDetailView: View {
             }
     }
 
-    // MARK: - Title header
+    // MARK: - Info Popover
 
-    private var titleHeader: some View {
-        HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(currentGame.name)
-                    .font(.title3)
-                    .fontWeight(.semibold)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
+    private var infoPopoverContent: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            infoPopoverRow("App ID", value: String(currentGame.id), monospaced: true)
 
-                HStack(spacing: 6) {
-                    if currentGame.playtimeMinutes > 0 {
-                        Text(currentGame.playtimeFormatted + " played")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    if !currentGame.isInstalled {
-                        NotInstalledBadge()
-                    }
+            if currentGame.windowsOnly {
+                Divider().padding(.leading, 12)
+                HStack {
+                    Text("Compatibility")
+                        .foregroundStyle(.secondary)
+                        .font(.subheadline)
+                    Spacer()
+                    WindowsBadge()
                 }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
             }
 
-            Spacer(minLength: 0)
+            Divider().padding(.leading, 12)
 
             Button {
-                library.toggleFavorite(appID: currentGame.id)
+                showInfoPopover = false
+                openWindow(id: "launch-log")
             } label: {
-                Image(systemName: library.isFavorite(appID: currentGame.id) ? "heart.fill" : "heart")
-                    .foregroundStyle(library.isFavorite(appID: currentGame.id) ? .pink : .secondary)
-                    .font(.title3)
+                Label("View Launch Logs", systemImage: "terminal")
             }
             .buttonStyle(.borderless)
-            .help(library.isFavorite(appID: currentGame.id) ? "Remove from Favorites" : "Add to Favorites")
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+
+            if currentGame.isInstalled {
+                Divider().padding(.leading, 12)
+
+                Button(role: .destructive) {
+                    showInfoPopover = false
+                    library.setInstalled(false, for: currentGame.id)
+                } label: {
+                    Label("Mark as Uninstalled", systemImage: "trash")
+                }
+                .buttonStyle(.borderless)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+            }
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
+        .frame(width: 240)
+        .padding(.vertical, 4)
+    }
+
+    private func infoPopoverRow(_ label: String, value: String, monospaced: Bool = false) -> some View {
+        HStack {
+            Text(label)
+                .foregroundStyle(.secondary)
+                .font(.subheadline)
+            Spacer()
+            Text(value)
+                .font(monospaced ? .subheadline.monospaced() : .subheadline)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
     }
 
     // MARK: - Footer
@@ -149,13 +230,11 @@ struct GameDetailView: View {
             Spacer()
             Button("Done") { onDismiss() }
                 .keyboardShortcut(.defaultAction)
+                .keyboardShortcut(.cancelAction)
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
-            Button("") { onDismiss() }
-                .keyboardShortcut(.cancelAction)
-                .hidden()
         }
-        .padding(.horizontal, 20)
+        .padding(.trailing, 20)
         .padding(.vertical, 12)
     }
 
@@ -173,16 +252,126 @@ struct GameDetailView: View {
         }
     }
 
+    // MARK: - Stats / Info section
+
+    @ViewBuilder
+    private var statsSection: some View {
+        // Short description from store API
+        if let desc = appDetails?.shortDescription, !desc.isEmpty {
+            Text(desc)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+
+        // Playtime card
+        playtimeCard
+
+        // Game info card (status, platform, genres, developer)
+        gameInfoCard
+
+        // Steam Store link
+        steamStoreLink
+    }
+
+    private var playtimeCard: some View {
+        VStack(spacing: 0) {
+            DetailRow(
+                icon: "clock",
+                label: "Total Playtime",
+                value: currentGame.playtimeMinutes == 0 ? "No playtime recorded" : currentGame.playtimeFormatted
+            )
+
+            if let recent = currentGame.playtime2WeekMinutes, recent > 0 {
+                DetailDivider()
+                let value = recent >= 60 ? "\(recent / 60) hr\(recent/60 == 1 ? "" : "s")" : "\(recent) min"
+                DetailRow(icon: "calendar", label: "Last 2 Weeks", value: value)
+            }
+        }
+        .modifier(GlassRoundedBackground(cornerRadius: 10))
+    }
+
+    @ViewBuilder
+    private var gameInfoCard: some View {
+        let genres = appDetails?.genres?.compactMap(\.description).filter { !$0.isEmpty } ?? []
+        let developer = appDetails?.developers?.first
+        let publisher = appDetails?.publishers?.first
+        let hasAnyInfo = !genres.isEmpty || developer != nil || publisher != nil || currentGame.windowsOnly
+
+        if hasAnyInfo {
+            VStack(spacing: 0) {
+                // Install status
+                DetailRow(
+                    icon: currentGame.isInstalled ? "internaldrive" : "icloud.and.arrow.down",
+                    label: "Installation",
+                    value: currentGame.isInstalled ? "Installed" : "Not Installed",
+                    valueColor: currentGame.isInstalled ? .green : .orange
+                )
+
+                // Platform
+                if currentGame.windowsOnly {
+                    DetailDivider()
+                    HStack {
+                        Label("Platform", systemImage: "desktopcomputer")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        WindowsBadge()
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 9)
+                }
+
+                // Genres
+                if !genres.isEmpty {
+                    DetailDivider()
+                    DetailRow(icon: "tag", label: "Genre", value: genres.prefix(3).joined(separator: ", "))
+                }
+
+                // Developer
+                if let dev = developer {
+                    DetailDivider()
+                    DetailRow(icon: "hammer", label: "Developer", value: dev)
+                }
+
+                // Publisher (only if different from developer)
+                if let pub = publisher, pub != developer {
+                    DetailDivider()
+                    DetailRow(icon: "building.2", label: "Publisher", value: pub)
+                }
+            }
+            .modifier(GlassRoundedBackground(cornerRadius: 10))
+        }
+    }
+
+    private var steamStoreLink: some View {
+        Button {
+            if let url = URL(string: "https://store.steampowered.com/app/\(currentGame.id)") {
+                NSWorkspace.shared.open(url)
+            }
+        } label: {
+            HStack {
+                Label("View on Steam Store", systemImage: "arrow.up.right.square")
+                    .font(.subheadline)
+                    .foregroundStyle(.primary)
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 11)
+        }
+        .buttonStyle(.plain)
+        .modifier(GlassRoundedBackground(cornerRadius: 10))
+    }
+
     // MARK: - Per-game gating
 
-    /// True when the global launcher is operating on THIS game specifically.
-    /// Prep states (preparingEngine / preparingPrefix / bootstrappingSteam / launching)
-    /// are attributed to the active game via launcher.activeAppID.
     private var isThisGame: Bool {
         launcher.activeAppID == game.id
     }
 
-    /// True when the UI should show active launch controls for this game.
     private var isThisGameActive: Bool {
         guard isThisGame else { return false }
         switch launcher.launchState {
@@ -197,8 +386,6 @@ struct GameDetailView: View {
 
     @ViewBuilder
     private var playButton: some View {
-        // If launcher is busy with a different game, show a plain Play button
-        // (user can't launch a second game simultaneously anyway).
         if let activeID = launcher.activeAppID, activeID != game.id {
             idleButton
         } else {
@@ -229,18 +416,15 @@ struct GameDetailView: View {
 
         case .running:
             HStack(spacing: 8) {
-                if launcher.processesConfirmed {
-                    Button {} label: {
-                        Label("Running", systemImage: "play.circle.fill")
-                            .font(.headline)
-                            .frame(minWidth: 110)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    .disabled(true)
-                } else {
-                    ProgressButton("Starting…")
+                Button {} label: {
+                    Label("Running", systemImage: "play.circle.fill")
+                        .font(.headline)
+                        .frame(minWidth: 130)
                 }
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
+                .controlSize(.large)
+                .disabled(true)
 
                 stopButton
             }
@@ -298,8 +482,6 @@ struct GameDetailView: View {
         .help(isLauncherBusyWithOtherGame ? "Stop the current game before launching another" : "")
     }
 
-    /// True when the launcher is actively working on a different game.
-    /// Prevents accidentally interrupting an in-progress launch or running game.
     private var isLauncherBusyWithOtherGame: Bool {
         guard let activeID = launcher.activeAppID, activeID != game.id else { return false }
         switch launcher.launchState {
@@ -328,45 +510,6 @@ struct GameDetailView: View {
         .controlSize(.large)
     }
 
-    // MARK: - Info
-
-    private var infoSection: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if let recent = currentGame.playtime2WeekMinutes, recent > 0 {
-                let value = recent >= 60 ? "\(recent / 60) hrs" : "\(recent) min"
-                infoRow("Last 2 weeks", value: value)
-                Divider().padding(.leading, 12)
-            }
-            infoRow("App ID", value: String(currentGame.id), monospaced: true)
-            if currentGame.windowsOnly {
-                Divider().padding(.leading, 12)
-                HStack {
-                    Text("Compatibility")
-                        .foregroundStyle(.secondary)
-                        .font(.subheadline)
-                    Spacer()
-                    WindowsBadge()
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
-            }
-        }
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
-    }
-
-    private func infoRow(_ label: String, value: String, monospaced: Bool = false) -> some View {
-        HStack {
-            Text(label)
-                .foregroundStyle(.secondary)
-                .font(.subheadline)
-            Spacer()
-            Text(value)
-                .font(monospaced ? .subheadline.monospaced() : .subheadline)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-    }
-
     // MARK: - Helpers
 
     private var currentGame: Game {
@@ -388,12 +531,44 @@ struct GameDetailView: View {
     }
 }
 
+// MARK: - Detail Row helpers
+
+private struct DetailRow: View {
+    let icon: String
+    let label: String
+    let value: String
+    var valueColor: Color = .primary
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Label(label, systemImage: icon)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text(value)
+                .font(.subheadline)
+                .fontWeight(.medium)
+                .foregroundStyle(valueColor)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+    }
+}
+
+private struct DetailDivider: View {
+    var body: some View {
+        Divider().padding(.leading, 36)
+    }
+}
+
 // MARK: - Not Installed Badge
 
 private struct NotInstalledBadge: View {
     var body: some View {
         Text("Not Installed")
-            .font(.system(size: 9, weight: .semibold))
+            .font(.caption2)
+            .fontWeight(.semibold)
             .foregroundStyle(.white)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
@@ -409,9 +584,12 @@ private struct ProgressButton: View {
 
     var body: some View {
         Button {} label: {
-            HStack(spacing: 8) {
-                ProgressView().scaleEffect(0.75)
+            HStack(spacing: 6) {
+                ProgressView()
+                    .scaleEffect(0.55)
+                    .frame(width: 14, height: 14)
                 Text(title)
+                    .font(.headline)
                     .lineLimit(1)
             }
             .frame(minWidth: 130)
@@ -424,8 +602,6 @@ private struct ProgressButton: View {
 
 // MARK: - Status Card
 
-/// Contextual status strip below the play button. Shows what Meridian is
-/// actually doing right now, with an elapsed timer and a link to full logs.
 private struct StatusCard: View {
     let game: Game
     let launcher: GameLauncher
@@ -433,95 +609,57 @@ private struct StatusCard: View {
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
-            HStack(spacing: 10) {
-                if showsSpinner(at: context.date) {
-                    ProgressView()
-                        .scaleEffect(0.7)
-                        .frame(width: 16, height: 16)
-                } else {
-                    Image(systemName: stateIcon)
-                        .font(.caption)
-                        .foregroundStyle(stateIconColor)
-                        .frame(width: 16, height: 16)
-                }
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 10) {
+                    statusIcon
 
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(statusMessage(at: context.date))
-                        .font(.subheadline)
-                        .foregroundStyle(.primary)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    if let elapsed = elapsedText(at: context.date) {
-                        Text(elapsed)
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                            .monospacedDigit()
-                    }
-
-                    if showsLastLog, let lastLog = launcher.logs.last, !lastLog.isEmpty {
-                        Text(lastLog)
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(statusMessage(at: context.date))
+                            .font(.subheadline)
+                            .foregroundStyle(.primary)
                             .lineLimit(1)
-                            .truncationMode(.middle)
+
+                        if let elapsed = elapsedText(at: context.date) {
+                            Text(elapsed)
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                                .monospacedDigit()
+                        }
                     }
-                }
 
-                Spacer()
+                    Spacer()
 
-                Button {
-                    openWindow(id: "launch-log")
-                } label: {
-                    Image(systemName: "terminal")
-                        .font(.caption)
+                    Button {
+                        openWindow(id: "launch-log")
+                    } label: {
+                        Label("Logs", systemImage: "terminal")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
+                    .help("Open launch log window")
                 }
-                .buttonStyle(.borderless)
-                .foregroundStyle(.tertiary)
-                .help("View launch logs")
+                .padding(12)
             }
-            .padding(12)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.separator, lineWidth: 0.5))
+            .modifier(GlassRoundedBackground(cornerRadius: 10))
         }
     }
 
-    private func showsSpinner(at date: Date) -> Bool {
+    @ViewBuilder
+    private var statusIcon: some View {
         switch launcher.launchState {
-        case .preparingEngine, .preparingPrefix, .bootstrappingSteam, .launching, .stopping:
-            return true
         case .running:
-            return !launcher.processesConfirmed
+            Image(systemName: "checkmark.circle.fill")
+                .font(.body)
+                .foregroundStyle(.green)
+        case .stopping:
+            Image(systemName: "stop.circle")
+                .font(.body)
+                .foregroundStyle(.secondary)
         default:
-            return false
-        }
-    }
-
-    /// Show the last log line during active prep/launch/unconfirmed-running states.
-    /// Hidden once confirmed running so it doesn't show stale text.
-    private var showsLastLog: Bool {
-        switch launcher.launchState {
-        case .preparingEngine, .preparingPrefix, .bootstrappingSteam, .launching:
-            return true
-        case .running:
-            return !launcher.processesConfirmed
-        default:
-            return false
-        }
-    }
-
-    private var stateIcon: String {
-        switch launcher.launchState {
-        case .running: return "checkmark.circle.fill"
-        case .stopping: return "stop.circle"
-        default: return "clock"
-        }
-    }
-
-    private var stateIconColor: Color {
-        switch launcher.launchState {
-        case .running: return .green
-        default: return .secondary
+            ProgressView()
+                .scaleEffect(0.6)
+                .frame(width: 18, height: 18)
         }
     }
 
@@ -534,29 +672,16 @@ private struct StatusCard: View {
         case .bootstrappingSteam:
             return "Updating Steam — first launch takes a few minutes"
         case .launching:
-            return "Launching \(game.name)…"
+            return "Starting \(game.name)…"
         case .running:
-            if launcher.processesConfirmed {
-                return game.isInstalled
-                    ? "Game is running"
-                    : "Installing via Steam — download in progress"
-            }
-            let elapsed = launcher.runningSince.map { date.timeIntervalSince($0) } ?? 0
-            // Grace period is 5s; if we still haven't confirmed by ~10s something
-            // is taking longer than usual (e.g. slow first Steam login).
-            return elapsed > 10
-                ? "Steam is loading — game window opening soon…"
-                : "Opening game window…"
+            return "Game is running"
         case .stopping:
-            return "Stopping game…"
+            return "Stopping…"
         default:
             return launcher.currentActivity ?? "Working…"
         }
     }
 
-    /// Elapsed time from the pipeline start (prep + launch) or from when
-    /// the game entered running state. Uses authoritative dates from the
-    /// launcher — never resets when the view is navigated away and back.
     private func elapsedText(at date: Date) -> String? {
         let start: Date?
         switch launcher.launchState {
