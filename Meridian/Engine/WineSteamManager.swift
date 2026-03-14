@@ -8,13 +8,17 @@ private let log = Logger(subsystem: "com.meridian.app", category: "WineSteamMana
 ///
 /// Responsible for:
 ///   - Bootstrapping Steam on first run (downloading the full client)
-///   - Launching games via steam.exe -applaunch (Steam handles its own init)
+///   - Running a persistent Steam process for near-instant game launches
+///   - Launching games via steam.exe -applaunch (IPC to running instance)
 ///   - Stopping Steam / killing Wine processes
 @Observable
 @MainActor
 final class WineSteamManager {
 
     private(set) var isRunning: Bool = false
+
+    /// The long-lived Steam process started at app launch.
+    private var persistentProcess: Process?
 
     // MARK: - Bootstrap
 
@@ -201,6 +205,135 @@ final class WineSteamManager {
         log.info("[launchGame] Steam+game process tree started — monitoring handoff to GameProcess")
         return pid
     }
+
+    // MARK: - Persistent Steam
+
+    /// Launches Steam in silent mode and keeps it running.
+    ///
+    /// The process stays alive for the app's lifetime so that subsequent
+    /// `steam.exe -applaunch` invocations use IPC to the running instance
+    /// instead of cold-starting a new one.
+    func startPersistent(engine: WineEngine, prefix: WinePrefix) throws {
+        guard persistentProcess == nil || !(persistentProcess?.isRunning ?? false) else {
+            log.info("[startPersistent] Steam already running — skipping")
+            return
+        }
+
+        let steamExe = prefix.steamExePath.path(percentEncoded: false)
+        let args = [steamExe, "-silent"]
+        log.info("[startPersistent] launching: wine64 \(args.joined(separator: " "))")
+
+        let process = Process()
+        process.executableURL = engine.wine64URL
+        process.arguments = args
+        process.environment = engine.environment(for: prefix)
+
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+
+        try process.run()
+
+        persistentProcess = process
+        isRunning = true
+        log.info("[startPersistent] pid=\(process.processIdentifier)")
+    }
+
+    /// Whether the persistent Steam process is still alive.
+    var isSteamProcessAlive: Bool {
+        persistentProcess?.isRunning ?? false
+    }
+
+    /// Polls until Steam is confirmed ready using multiple signals.
+    ///
+    /// Checks three indicators each poll cycle:
+    ///   1. **wineserver** is running (Wine IPC layer operational)
+    ///   2. **steam.exe** processes exist (Steam client is alive)
+    ///   3. **steam.pid** file exists in the Steam install dir (Steam IPC ready)
+    ///
+    /// All three must be true for 3 consecutive polls before declaring ready.
+    /// Uses `pgrep` — does NOT use `ps axeww -e` which hangs during CrossOver startup.
+    func waitUntilReady(prefix: WinePrefix, timeout: Duration = .seconds(90)) async throws {
+        let started = ContinuousClock.now
+        var attempt = 0
+        var consecutiveReady = 0
+        let steamPidPath = prefix.steamInstallDir.appending(path: "steam.pid").path(percentEncoded: false)
+
+        log.info("[waitUntilReady] multi-signal check (timeout=\(timeout))")
+        log.info("[waitUntilReady] steam.pid path=\(steamPidPath)")
+
+        while ContinuousClock.now - started < timeout {
+            guard !Task.isCancelled else { return }
+            attempt += 1
+
+            let signals = await Task.detached { () -> (wineserver: Bool, steamProc: Bool, steamPid: Bool) in
+                let wineserver: Bool = {
+                    let t = Process(); t.executableURL = URL(filePath: "/usr/bin/pgrep")
+                    t.arguments = ["-q", "wineserver"]
+                    t.standardOutput = FileHandle.nullDevice; t.standardError = FileHandle.nullDevice
+                    try? t.run(); t.waitUntilExit()
+                    return t.terminationStatus == 0
+                }()
+
+                let steamProc: Bool = {
+                    let t = Process(); t.executableURL = URL(filePath: "/usr/bin/pgrep")
+                    t.arguments = ["-f", "steam.exe"]
+                    t.standardOutput = FileHandle.nullDevice; t.standardError = FileHandle.nullDevice
+                    try? t.run(); t.waitUntilExit()
+                    return t.terminationStatus == 0
+                }()
+
+                let steamPid = FileManager.default.fileExists(atPath: steamPidPath)
+
+                return (wineserver, steamProc, steamPid)
+            }.value
+
+            let allReady = signals.wineserver && signals.steamProc
+            // steam.pid is a bonus signal — require wineserver + steam.exe, and
+            // accept steam.pid if it exists (some Wine/Steam combos don't write it)
+            let strongReady = allReady && signals.steamPid
+            let acceptable = allReady
+
+            if strongReady {
+                consecutiveReady += 1
+            } else if acceptable {
+                // Count it but require more consecutive confirmations without steam.pid
+                consecutiveReady += 1
+            } else {
+                consecutiveReady = 0
+            }
+
+            if attempt % 5 == 0 || consecutiveReady > 0 {
+                log.info("[waitUntilReady] attempt=\(attempt) | wineserver=\(signals.wineserver) steam.exe=\(signals.steamProc) steam.pid=\(signals.steamPid) | consecutive=\(consecutiveReady)")
+            }
+
+            let requiredConsecutive = strongReady ? 3 : 4
+            if consecutiveReady >= requiredConsecutive {
+                let elapsed = ContinuousClock.now - started
+                log.info("[waitUntilReady] Steam confirmed ready after \(attempt) polls (\(elapsed)) — wineserver=\(signals.wineserver) steam.exe=\(signals.steamProc) steam.pid=\(signals.steamPid)")
+                isRunning = true
+                return
+            }
+
+            try? await Task.sleep(for: .seconds(2))
+        }
+
+        log.error("[waitUntilReady] TIMEOUT — Steam not ready after \(timeout)")
+        throw SteamError.bootstrapFailed(exitCode: -1, detail: "Timed out waiting for Steam to initialize")
+    }
+
+    /// Gracefully shuts down the persistent Steam process.
+    func stopPersistent(engine: WineEngine, prefix: WinePrefix) async {
+        guard persistentProcess?.isRunning ?? false else {
+            log.info("[stopPersistent] no persistent process running")
+            persistentProcess = nil
+            return
+        }
+
+        log.info("[stopPersistent] sending -shutdown")
+        await stop(engine: engine, prefix: prefix)
+        persistentProcess = nil
+    }
+
 
     // MARK: - Process Control
 

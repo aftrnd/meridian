@@ -4,14 +4,15 @@ import os.log
 
 private let log = Logger(subsystem: "com.meridian.app", category: "GameLauncher")
 
-/// Orchestrates the full game launch pipeline via Wine + GPTK:
+/// Orchestrates game launches via Wine + Steam.
 ///
-///   1. Verify Wine engine is installed
-///   2. Ensure Wine prefix exists (create + install Steam if needed)
-///   3. Bootstrap Steam client if first run (download steamui.dll etc.)
-///   4. Copy macOS Steam session files into prefix for auto-login
-///   5. Launch game via wine64 steam.exe -applaunch
-///   6. Monitor Wine processes and report exit
+/// The heavy initialization (prefix, Steam install, bootstrap, session sync,
+/// and persistent Steam startup) is handled by `BootstrapManager` at app
+/// launch. By the time the user clicks Play, this pipeline only needs to:
+///
+///   1. Guard that the environment is ready
+///   2. Send steam.exe -applaunch to the running Steam instance (via IPC)
+///   3. Monitor Wine processes and report exit
 @Observable
 @MainActor
 final class GameLauncher {
@@ -112,8 +113,14 @@ final class GameLauncher {
 
     /// Stops the currently running game.
     func stopGame(engine: WineEngine, steamManager: WineSteamManager) async {
-        guard case .running(let appID) = launchState else {
-            log.warning("[stopGame] not in running state — current=\(String(describing: self.launchState))")
+        let appID: Int
+        switch launchState {
+        case .running(let id):
+            appID = id
+        case .launching:
+            appID = activeAppID ?? 0
+        default:
+            log.warning("[stopGame] not in running/launching state — current=\(String(describing: self.launchState))")
             return
         }
         log.info("[stopGame] stopping appID=\(appID)")
@@ -160,99 +167,26 @@ final class GameLauncher {
         log.info("║ engine ready=\(engine.isReady)")
         log.info("║ prefix exists=\(self.prefix.exists)")
         log.info("║ steam installed=\(self.prefix.isSteamInstalled)")
-        log.info("║ needs bootstrap=\(steamManager.needsBootstrap(prefix: self.prefix))")
+        log.info("║ steam persistent alive=\(steamManager.isSteamProcessAlive)")
         log.info("║ prefix path=\(self.prefix.path.path(percentEncoded: false))")
         log.info("║ wine64=\(engine.wine64URL.path(percentEncoded: false))")
         log.info("╚══════════════════════════════════════════════════")
-
-        // 1. Verify engine.
-        transition(to: .preparingEngine, activity: "Checking Wine runtime...")
-        appendLog("[1/6] Checking Wine runtime...")
 
         guard engine.isReady else {
             fail("Wine runtime is not installed. Go to Settings to download it.")
             return
         }
-        appendLog("[1/6] Wine runtime OK")
-
-        guard !Task.isCancelled else { return }
-
-        // 2. Ensure prefix exists.
-        transition(to: .preparingPrefix, activity: "Preparing Wine environment...")
-
-        if !prefix.exists {
-            appendLog("[2/6] Creating Wine prefix...")
-            do {
-                try await prefix.create(engine: engine)
-                appendLog("[2/6] Wine prefix created")
-            } catch {
-                fail("Failed to create Wine environment: \(error.localizedDescription)", error: error)
-                return
-            }
-        } else {
-            appendLog("[2/6] Wine prefix exists")
-        }
-
-        guard !Task.isCancelled else { return }
-
-        // 3. Install Steam bootstrapper if needed.
-        if !prefix.isSteamInstalled {
-            transition(to: .preparingPrefix, activity: "Installing Steam...")
-            appendLog("[3/6] Installing Steam into Wine prefix...")
-            do {
-                try await prefix.installSteam(engine: engine)
-                appendLog("[3/6] Steam installed")
-            } catch {
-                fail("Failed to install Steam: \(error.localizedDescription)", error: error)
-                return
-            }
-        } else {
-            appendLog("[3/6] Steam already installed")
-        }
-
-        guard !Task.isCancelled else { return }
-
-        // 4. Bootstrap Steam (first-run client download) if needed.
-        if steamManager.needsBootstrap(prefix: prefix) {
-            transition(to: .bootstrappingSteam, activity: "Steam is updating for the first time — this may take a few minutes...")
-            appendLog("[4/6] Bootstrapping Steam (first-time client download)...")
-
-            do {
-                try await steamManager.bootstrap(engine: engine, prefix: prefix)
-                appendLog("[4/6] Steam bootstrap complete")
-            } catch {
-                fail("Steam bootstrap failed: \(error.localizedDescription)", error: error)
-                await cleanupProcesses(engine: engine, steamManager: steamManager)
-                return
-            }
-        } else {
-            appendLog("[4/6] Steam client ready")
-        }
-
-        guard !Task.isCancelled else { return }
-
-        // 5. Copy session files from macOS Steam.
-        currentActivity = "Syncing Steam session..."
-        appendLog("[5/6] Syncing Steam session...")
-        let strategy = await sessionBridge.prepare(prefix: prefix)
-        switch strategy {
-        case .sessionFileCopy:
-            appendLog("[5/6] Copied macOS Steam session for auto-login")
-        case .none:
-            appendLog("[5/6] No macOS Steam session found — manual login may be required")
-        }
-
-        guard !Task.isCancelled else {
-            log.info("[launch] cancelled before step 6")
+        guard prefix.exists, prefix.isSteamInstalled else {
+            fail("Wine environment not ready — restart the app to reinitialize.")
             return
         }
+        appendLog("Environment ready — Steam is running")
 
-        // 6. Launch game directly via steam.exe -applaunch.
-        //    Steam handles its own initialization, login, and game launch
-        //    in a single process tree. No need to pre-start Steam or wait
-        //    for IPC — this is the standard approach used by Whisky/Mythic.
-        transition(to: .launching, activity: "Launching \(game.name) — sign into Steam if prompted...")
-        appendLog("[6/6] Launching steam.exe -applaunch \(game.id)")
+        guard !Task.isCancelled else { return }
+
+        // Send steam.exe -applaunch — stays in .launching until processes confirmed
+        transition(to: .launching, activity: "Launching \(game.name)…")
+        appendLog("Launching steam.exe -applaunch \(game.id)")
 
         let launchedPID: Int32
         do {
@@ -261,43 +195,47 @@ final class GameLauncher {
                 engine: engine,
                 prefix: prefix
             )
-            appendLog("[6/6] Launch dispatched (pid=\(launchedPID))")
+            appendLog("Launch dispatched (pid=\(launchedPID))")
             log.info("[launch] wine process pid=\(launchedPID)")
         } catch {
             fail("Launch failed: \(error.localizedDescription)", error: error)
-            await cleanupProcesses(engine: engine, steamManager: steamManager)
             return
         }
 
-        // 7. Monitor Wine processes for game exit.
-        launchState = .running(appID: game.id)
-        runningSince = .now
-        currentActivity = nil
-        appendLog("Game launched — monitoring Wine processes")
         library?.setInstalled(true, for: game.id)
-        log.info("[launch] state=RUNNING appID=\(game.id) | monitoring pid=\(launchedPID)")
 
-        // Forward real-time monitoring status into the in-app log so the user
-        // isn't left guessing. GameProcess calls this on the main actor.
+        let gamePattern = prefix.gameInstallDir(appID: game.id)
+        log.info("[launch] resolved game pattern: \(gamePattern ?? "nil")")
+        appendLog("Waiting for game processes to appear…")
+        log.info("[launch] state=LAUNCHING appID=\(game.id) | monitoring pid=\(launchedPID)")
+
         gameProcess.startMonitoring(
             appID: game.id,
             launchedPID: launchedPID,
             engine: engine,
             prefix: prefix,
+            gamePattern: gamePattern,
             onLog: { [weak self] line in self?.appendLog(line) }
         )
 
+        // Wait for the monitor to advance through its phases.
+        // Stay in .launching until game processes are confirmed (phase == .running).
         while gameProcess.isRunning {
             if Task.isCancelled {
                 log.info("[launch] task cancelled during monitoring — stopping game")
                 await gameProcess.stopGame(engine: engine, prefix: prefix)
                 break
             }
-            // Sync confirmed state from GameProcess into our stored property
-            // so SwiftUI views that read processesConfirmed re-render.
+
+            // Transition to .running the moment processes are confirmed
             if !processesConfirmed && gameProcess.confirmedRunning {
                 processesConfirmed = true
+                launchState = .running(appID: game.id)
+                runningSince = .now
+                currentActivity = nil
+                log.info("[launch] state=RUNNING appID=\(game.id) — game processes confirmed")
             }
+
             try? await Task.sleep(for: .seconds(1))
         }
 
@@ -306,16 +244,31 @@ final class GameLauncher {
             return
         }
 
-        appendLog("Game session ended")
-        launchState = .exited(appID: game.id)
+        // Determine final state based on how the monitor exited
+        switch gameProcess.monitorPhase {
+        case .exited:
+            appendLog("Game session ended")
+            launchState = .exited(appID: game.id)
+            log.info("[launch] state=EXITED appID=\(game.id)")
+
+        case .timedOut:
+            fail("Game did not start within the expected time. Steam may still be updating or validating files — try again.")
+            log.warning("[launch] state=FAILED (timeout) appID=\(game.id)")
+
+        case .failed(let detail):
+            fail(detail)
+            log.error("[launch] state=FAILED appID=\(game.id) | \(detail)")
+
+        default:
+            appendLog("Game session ended")
+            launchState = .exited(appID: game.id)
+            log.info("[launch] state=EXITED appID=\(game.id) (monitor phase=\(String(describing: self.gameProcess.monitorPhase)))")
+        }
+
         runningSince = nil
         pipelineStartDate = nil
         currentActivity = nil
         processesConfirmed = false
-        // Keep activeAppID set to the exited game so the detail view can show
-        // the final "Play again" state scoped to the correct game. It is cleared
-        // on the next launch or explicit cleanup.
-        log.info("[launch] state=EXITED appID=\(game.id)")
     }
 
     // MARK: - Private helpers

@@ -418,7 +418,10 @@ struct GameDetailView: View {
             }
 
         case .launching:
-            ProgressButton("Launching…")
+            HStack(spacing: 8) {
+                ProgressButton("Launching…")
+                stopButton
+            }
 
         case .running:
             HStack(spacing: 8) {
@@ -605,18 +608,13 @@ private struct ProgressButton: View {
 
     var body: some View {
         Button {} label: {
-            HStack(spacing: 6) {
-                ProgressView()
-                    .scaleEffect(0.55)
-                    .frame(width: 14, height: 14)
-                Text(title)
-                    .font(.headline)
-                    .lineLimit(1)
-            }
-            .frame(
-                minWidth: GameDetailMetrics.launchButtonMinWidth,
-                minHeight: GameDetailMetrics.launchButtonHeight
-            )
+            Text(title)
+                .font(.headline)
+                .lineLimit(1)
+                .frame(
+                    minWidth: GameDetailMetrics.launchButtonMinWidth,
+                    minHeight: GameDetailMetrics.launchButtonHeight
+                )
         }
         .inactiveAwareProminence(controlActiveState == .inactive)
         .controlSize(.large)
@@ -707,9 +705,12 @@ private struct StatusCard: View {
         case .bootstrappingSteam:
             return "Updating Steam — first launch takes a few minutes"
         case .launching:
-            return "Starting \(game.name)…"
+            if let last = launcher.logs.last, !last.isEmpty {
+                return last
+            }
+            return "Waiting for Steam to start \(game.name)…"
         case .running:
-            return "Game is running"
+            return "\(game.name) is running"
         case .stopping:
             return "Stopping…"
         default:

@@ -7,69 +7,123 @@ private let log = Logger(subsystem: "com.meridian.app", category: "GameProcess")
 /// Monitors a game launched through Wine/Steam.
 ///
 /// After `steam.exe -applaunch`, the game runs as a Wine subprocess.
-/// We detect game exit by checking whether Wine processes are still alive.
+/// We detect game startup and exit by searching for the game's own process.
 ///
-/// Wine games appear as native macOS windows managed by the window server.
-/// No display wrapper is needed — the game renders through D3DMetal to Metal.
+/// Uses two-phase monitoring with **game-specific process detection**:
+///   - Parses the Steam appmanifest to get the game's `installdir` name
+///     (e.g. "Animal Well"). Wine on macOS exposes Windows-style paths in
+///     process listings, so `pgrep -f "Animal Well"` matches the game process.
+///   - **Phase 1 (Startup):** Waits up to 120s for `pgrep -f "<game>"` to
+///     find a match, confirming the game binary has been spawned.
+///   - **Phase 2 (Running):** Polls `pgrep -f "<game>"` every 3s. When it
+///     returns no matches for 3 consecutive polls, the game has exited.
+///
+/// This is immune to both lingering Wine helper processes (they don't contain
+/// the game name) and transient launcher PID churn (we match by name, not PID).
+///
+/// When the game pattern is unavailable (ACF missing), falls back to
+/// continuously-refreshed PID-set tracking above a captured baseline.
 @Observable
 @MainActor
 final class GameProcess {
 
-    private(set) var isRunning: Bool = false
-    /// Set to true after the monitoring grace period when Wine processes are
-    /// first confirmed alive. Lets the UI snap from "Starting…" to "Running"
-    /// without waiting for an arbitrary elapsed threshold.
-    private(set) var confirmedRunning: Bool = false
+    // MARK: - Monitor Phase
+
+    enum MonitorPhase: Equatable {
+        case idle
+        case startup
+        case running
+        case exited
+        case timedOut
+        case failed(String)
+    }
+
+    private(set) var monitorPhase: MonitorPhase = .idle
     private(set) var appID: Int = 0
     private(set) var logs: [String] = []
 
     /// PID of the launched Wine process. Used to check if the session is still alive.
     private(set) var launchedPID: Int32 = 0
 
+    var isRunning: Bool {
+        switch monitorPhase {
+        case .startup, .running: return true
+        default: return false
+        }
+    }
+
+    var confirmedRunning: Bool { monitorPhase == .running }
+
     private var monitorTask: Task<Void, Never>?
-    /// Callback forwarded to `GameLauncher.logs` so the user sees real-time
-    /// monitoring status without opening Console.app.
     private var onLog: ((String) -> Void)?
+
+    /// Baseline Wine process count captured before the game launches.
+    /// Only used for fallback mode (when gamePattern is nil).
+    private var baselineHostCount: Int = 0
+
+    /// PIDs that existed at baseline (fallback mode only).
+    private var baselinePIDs: Set<Int32> = []
+
+    /// The pgrep search pattern derived from the Wine engine binary path.
+    private var wineSearchPattern: String = "wine"
+
+    private static let startupTimeout: Duration = .seconds(120)
+    private static let pollInterval: Duration = .seconds(3)
+    private static let consecutiveEmptyForExit = 2
 
     // MARK: - Public API
 
     /// Begins monitoring after steam.exe -applaunch dispatch.
     ///
-    /// - Parameter onLog: Optional closure called on the main actor whenever
-    ///   a user-facing status line is ready (e.g. "Game running", "Game exited").
-    ///   Pass `GameLauncher.appendLog` to surface these lines in the in-app log.
+    /// - Parameters:
+    ///   - gamePattern: The game's installdir name from the ACF manifest (e.g. "Animal Well").
+    ///     Used as a `pgrep -f` pattern to detect the game-specific process.
+    ///     If nil, falls back to generic Wine process counting.
+    ///   - onLog: Optional closure called on the main actor whenever
+    ///     a user-facing status line is ready.
     func startMonitoring(
         appID: Int,
         launchedPID: Int32,
         engine: WineEngine,
         prefix: WinePrefix,
+        gamePattern: String? = nil,
         onLog: ((String) -> Void)? = nil
     ) {
-        log.info("[startMonitoring] appID=\(appID) pid=\(launchedPID)")
+        log.info("[startMonitoring] appID=\(appID) pid=\(launchedPID) gamePattern=\(gamePattern ?? "nil")")
         self.appID = appID
         self.launchedPID = launchedPID
-        self.isRunning = true
-        self.confirmedRunning = false
+        self.monitorPhase = .startup
         self.logs = []
         self.onLog = onLog
+        self.baselineHostCount = 0
+        self.baselinePIDs = []
+
+        let wineBinDir = engine.wine64URL.deletingLastPathComponent().path(percentEncoded: false)
+        self.wineSearchPattern = wineBinDir
+        log.info("[startMonitoring] wine search pattern: \(wineBinDir)")
 
         monitorTask?.cancel()
+        let winePattern = self.wineSearchPattern
         monitorTask = Task { [weak self] in
-            await self?.monitorLoop(appID: appID, launchedPID: launchedPID, prefix: prefix)
+            await self?.monitorLoop(
+                appID: appID,
+                launchedPID: launchedPID,
+                prefix: prefix,
+                winePattern: winePattern,
+                gamePattern: gamePattern
+            )
         }
     }
 
     /// Stops the game by killing the Wine server for the prefix.
-    /// Awaits the kill so re-launch has a clean state.
     func stopGame(engine: WineEngine, prefix: WinePrefix) async {
         let currentAppID = self.appID
         log.info("[stopGame] appID=\(currentAppID) — sending wineserver -k")
         monitorTask?.cancel()
         monitorTask = nil
-        isRunning = false
+        monitorPhase = .idle
         launchedPID = 0
 
-        confirmedRunning = false
         let wineserverPath = engine.wineserverURL.path(percentEncoded: false)
         let prefixPath = prefix.path.path(percentEncoded: false)
         await Task.detached {
@@ -83,43 +137,81 @@ final class GameProcess {
         log.info("[game] \(line)")
     }
 
-    // MARK: - Private
+    // MARK: - Two-Phase Monitor Loop
 
-    /// Monitors Wine processes to detect when the game session ends.
-    ///
-    /// CrossOver's `wineloader` is a launcher that forks and exits immediately
-    /// (exit code 0). The actual game runs under the wineserver as a child of
-    /// `wine64-preloader`. We therefore rely on two signals:
-    ///
-    ///   1. **Wine process count** (primary) — counts all processes whose
-    ///      environment or command line references our WINEPREFIX.
-    ///   2. **Launched PID liveness** (secondary) — supplements the primary
-    ///      check but does NOT trigger exit alone, because CrossOver's
-    ///      wineloader exits almost immediately by design.
-    ///
-    /// All blocking operations run on background threads via `Task.detached`.
     private func monitorLoop(
         appID: Int,
         launchedPID: Int32,
-        prefix: WinePrefix
+        prefix: WinePrefix,
+        winePattern: String,
+        gamePattern: String?
     ) async {
         log.info("[monitor] started for appID=\(appID) pid=\(launchedPID)")
-        onLog?("Steam initializing — waiting for game processes to start…")
+        if let gp = gamePattern {
+            log.info("[monitor] game-specific pattern: \"\(gp)\"")
+        } else {
+            log.info("[monitor] no game pattern — using fallback (PID-set baseline)")
+        }
 
-        // Short grace period so Wine/Steam can fork its process tree.
-        // CrossOver's wineloader forks and exits almost immediately, so we
-        // rely on child processes appearing within a few seconds.
-        log.info("[monitor] grace period (5s) for game process tree to start")
-        try? await Task.sleep(for: .seconds(5))
+        // Brief grace so the transient -applaunch IPC process can exit
+        // before we capture the baseline.
+        try? await Task.sleep(for: .seconds(2))
         guard !Task.isCancelled else { return }
-        log.info("[monitor] grace period ended — starting active polling")
-        onLog?("Scanning for Wine processes…")
 
+        // Capture baseline for fallback mode
+        let baseline = await Task.detached {
+            Self.countProcesses(matching: winePattern)
+        }.value
+        baselineHostCount = baseline.count
+        baselinePIDs = baseline.pids
+        log.info("[monitor] baseline: \(baseline.count) processes, pids=\(self.baselinePIDs.sorted())")
+        for line in baseline.lines {
+            log.debug("[monitor]   baseline: \(line.prefix(200))")
+        }
+
+        // ── Phase 1: Startup ──────────────────────────────────────────────
+        let startupOK = await startupPhase(
+            appID: appID, launchedPID: launchedPID, prefix: prefix,
+            winePattern: winePattern, gamePattern: gamePattern
+        )
+        guard startupOK, !Task.isCancelled else { return }
+
+        // ── Phase 2: Running ──────────────────────────────────────────────
+        await runningPhase(
+            appID: appID, winePattern: winePattern, gamePattern: gamePattern
+        )
+    }
+
+    // MARK: - Phase 1: Startup
+
+    /// Polls for up to `startupTimeout` waiting for the game process.
+    /// Returns `true` if game was found, `false` on timeout/cancel/failure.
+    private func startupPhase(
+        appID: Int,
+        launchedPID: Int32,
+        prefix: WinePrefix,
+        winePattern: String,
+        gamePattern: String?
+    ) async -> Bool {
+        onLog?("Waiting for Steam to start the game…")
+        log.info("[monitor:startup] phase=startup | timeout=\(Self.startupTimeout) | gamePattern=\(gamePattern ?? "fallback")")
+
+        let startupBegan = ContinuousClock.now
         var pollCount = 0
-        var consecutiveEmpty = 0
         var pidExited = false
+        var consecutiveDetected = 0
 
         while !Task.isCancelled {
+            let elapsed = ContinuousClock.now - startupBegan
+            if elapsed >= Self.startupTimeout {
+                log.error("[monitor:startup] TIMEOUT — no game processes after \(Self.startupTimeout)")
+                onLog?("Timed out waiting for game to start")
+                appendLog("Startup timeout — no game processes appeared within \(Int(Self.startupTimeout.components.seconds))s")
+                monitorPhase = .timedOut
+                self.launchedPID = 0
+                return false
+            }
+
             pollCount += 1
 
             if !pidExited {
@@ -128,107 +220,222 @@ final class GameProcess {
                 }.value
                 if !pidAlive {
                     pidExited = true
-                    log.info("[monitor] launched process (pid=\(launchedPID)) exited (expected for CrossOver launcher)")
+                    log.info("[monitor:startup] launched PID \(launchedPID) exited (expected)")
                 }
             }
 
-            let prefixPath = prefix.path.path(percentEncoded: false)
-            let (wineProcessCount, matchedLines) = await Task.detached {
-                Self.countWineProcessesVerbose(prefixPath: prefixPath)
+            let gameDetected: Bool
+            var detectionMethod = "unknown"
+
+            if let gp = gamePattern {
+                // Primary: game-specific pgrep
+                let result = await Task.detached {
+                    Self.countProcesses(matching: gp)
+                }.value
+                gameDetected = result.count > 0
+                detectionMethod = "game-specific(\(result.count))"
+
+                if pollCount <= 3 || result.count > 0 {
+                    for line in result.lines {
+                        log.debug("[monitor:startup]   game-match: \(line.prefix(200))")
+                    }
+                }
+            } else {
+                // Fallback: engine-path delta above baseline
+                let result = await Task.detached {
+                    Self.countProcesses(matching: winePattern)
+                }.value
+                let newPIDs = result.pids.subtracting(self.baselinePIDs)
+                gameDetected = !newPIDs.isEmpty
+                detectionMethod = "fallback-delta(new=\(newPIDs.count))"
+            }
+
+            if gameDetected {
+                consecutiveDetected += 1
+            } else {
+                consecutiveDetected = 0
+            }
+
+            if consecutiveDetected >= 2 {
+                monitorPhase = .running
+                log.info("[monitor:startup] game CONFIRMED after \(pollCount) polls (\(elapsed)) via \(detectionMethod)")
+                appendLog("Game confirmed running (via \(detectionMethod))")
+                onLog?("Game is running")
+                return true
+            }
+
+            // Check wineserver health
+            let wineserverAlive = await Task.detached {
+                Self.isWineserverRunning()
             }.value
+            if !wineserverAlive && pidExited {
+                log.error("[monitor:startup] wineserver died and launched PID exited — environment lost")
+                onLog?("Wine environment stopped unexpectedly")
+                appendLog("Failed — Wine environment stopped before game started")
+                monitorPhase = .failed("Wine environment stopped before the game could start")
+                self.launchedPID = 0
+                return false
+            }
 
-            if wineProcessCount == 0 {
-                consecutiveEmpty += 1
-                log.info("[monitor] poll=\(pollCount) | pidExited=\(pidExited) | wineProcs=0 (consecutive=\(consecutiveEmpty))")
+            if pollCount % 3 == 0 || consecutiveDetected > 0 {
+                let secs = Int(elapsed.components.seconds)
+                log.info("[monitor:startup] poll=\(pollCount) | \(secs)s | \(detectionMethod) | wineserver=\(wineserverAlive) | consecutive=\(consecutiveDetected)")
+            }
+            if pollCount % 5 == 0 {
+                onLog?("Waiting for game to start… (\(Int(elapsed.components.seconds))s)")
+            }
 
-                // 3 consecutive empty polls (≈6s) is sufficient to confirm exit.
-                if consecutiveEmpty >= 3 {
-                    log.info("[monitor] game exited (no prefix processes for 3 consecutive polls)")
+            try? await Task.sleep(for: Self.pollInterval)
+        }
+
+        log.info("[monitor:startup] cancelled (appID=\(appID))")
+        return false
+    }
+
+    // MARK: - Phase 2: Running
+
+    /// Polls until the game process disappears.
+    ///
+    /// With a game pattern: checks `pgrep -f "<gamePattern>"` each poll.
+    /// Without (fallback): checks if any PIDs above baseline still exist,
+    /// with a 15-second grace period when the set first becomes empty.
+    private func runningPhase(
+        appID: Int,
+        winePattern: String,
+        gamePattern: String?
+    ) async {
+        log.info("[monitor:running] phase=running — watching for exit via \(gamePattern != nil ? "game-specific" : "fallback") detection")
+
+        var pollCount = 0
+        var consecutiveGone = 0
+        var gracePeriodStart: ContinuousClock.Instant?
+
+        while !Task.isCancelled {
+            pollCount += 1
+
+            let gameGone: Bool
+
+            if let gp = gamePattern {
+                let result = await Task.detached {
+                    Self.countProcesses(matching: gp)
+                }.value
+                gameGone = result.count == 0
+
+                if pollCount <= 3 || pollCount % 10 == 0 || gameGone {
+                    log.info("[monitor:running] poll=\(pollCount) | game-specific=\(result.count) | gone=\(gameGone)")
+                }
+                if !gameGone, pollCount <= 3 {
+                    for line in result.lines {
+                        log.debug("[monitor:running]   game-match: \(line.prefix(200))")
+                    }
+                }
+            } else {
+                // Fallback: continuously-refreshed PID-set above baseline
+                let result = await Task.detached {
+                    Self.countProcesses(matching: winePattern)
+                }.value
+                let newPIDs = result.pids.subtracting(self.baselinePIDs)
+
+                if newPIDs.isEmpty {
+                    if gracePeriodStart == nil {
+                        gracePeriodStart = .now
+                        log.info("[monitor:running] poll=\(pollCount) | fallback: no new PIDs — starting 15s grace period")
+                    }
+                    let graceElapsed = ContinuousClock.now - gracePeriodStart!
+                    gameGone = graceElapsed >= .seconds(15)
+                    log.info("[monitor:running] poll=\(pollCount) | fallback: new=\(newPIDs.count) grace=\(Int(graceElapsed.components.seconds))s")
+                } else {
+                    gracePeriodStart = nil
+                    gameGone = false
+                    if pollCount <= 3 || pollCount % 10 == 0 {
+                        log.info("[monitor:running] poll=\(pollCount) | fallback: new=\(newPIDs.sorted())")
+                    }
+                }
+            }
+
+            if gameGone {
+                consecutiveGone += 1
+                log.info("[monitor:running] poll=\(pollCount) | gone consecutive=\(consecutiveGone)/\(Self.consecutiveEmptyForExit)")
+
+                if consecutiveGone >= Self.consecutiveEmptyForExit {
+                    log.info("[monitor:running] game exited (no game process for \(Self.consecutiveEmptyForExit) consecutive polls)")
                     appendLog("Game exited")
-                    onLog?("Wine processes stopped — game has exited")
+                    onLog?("Game has exited")
                     break
                 }
             } else {
-                consecutiveEmpty = 0
-                if !confirmedRunning {
-                    confirmedRunning = true
-                    log.info("[monitor] poll=\(pollCount) | game CONFIRMED running (wineProcs=\(wineProcessCount))")
-                    appendLog("Game confirmed running (\(wineProcessCount) Wine processes)")
-                    onLog?("Game running (\(wineProcessCount) Wine process(es) active)")
-                } else {
-                    log.info("[monitor] poll=\(pollCount) | pidExited=\(pidExited) | wineProcs=\(wineProcessCount)")
-                    // Surface a periodic heartbeat so the log doesn't go silent during long sessions.
-                    if pollCount % 15 == 0 {
-                        onLog?("Still running — \(wineProcessCount) Wine process(es) active")
-                    }
-                }
-                if pollCount <= 3 || pollCount % 6 == 0 {
-                    for line in matchedLines {
-                        log.debug("[monitor]   matched: \(line.prefix(200))")
-                    }
+                consecutiveGone = 0
+                if pollCount % 15 == 0 {
+                    onLog?("Still running")
                 }
             }
 
-            try? await Task.sleep(for: .seconds(2))
+            try? await Task.sleep(for: Self.pollInterval)
         }
 
         if Task.isCancelled {
-            log.info("[monitor] cancelled (appID=\(appID))")
+            log.info("[monitor:running] cancelled (appID=\(appID))")
         }
 
-        isRunning = false
-        confirmedRunning = false
+        monitorPhase = .exited
         self.launchedPID = 0
         log.info("[monitor] ended for appID=\(appID)")
     }
 
-    /// Checks whether a process is still alive without sending a signal.
+    // MARK: - Process Helpers
+
     private nonisolated static func isProcessAlive(pid: Int32) -> Bool {
         kill(pid, 0) == 0
     }
 
-    /// Counts Wine/game processes associated with the given prefix path.
-    /// Returns the count and the matched lines for diagnostic logging.
-    /// Runs on a background thread — never call from MainActor directly.
-    ///
-    /// Uses prefix path as the sole filter (same approach as TerminationCleanup)
-    /// because CrossOver child processes (steam.exe, sgh.exe, etc.) re-exec under
-    /// their own names and do NOT contain "wine" in their command line — only the
-    /// prefix path in their arguments identifies them as ours.
-    private nonisolated static func countWineProcessesVerbose(prefixPath: String) -> (Int, [String]) {
-        let process = Process()
-        process.executableURL = URL(filePath: "/bin/ps")
-        process.arguments = ["axeww", "-o", "pid,command"]
+    private nonisolated static func isWineserverRunning() -> Bool {
+        let t = Process(); t.executableURL = URL(filePath: "/usr/bin/pgrep")
+        t.arguments = ["-q", "wineserver"]
+        t.standardOutput = FileHandle.nullDevice; t.standardError = FileHandle.nullDevice
+        try? t.run(); t.waitUntilExit()
+        return t.terminationStatus == 0
+    }
 
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
+    // MARK: - Process Detection
 
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            log.error("[countWineProcesses] ps failed: \(error.localizedDescription)")
-            return (0, [])
+    struct ProcessCheckResult: Sendable {
+        let count: Int
+        let lines: [String]
+
+        var pids: Set<Int32> {
+            Set(lines.compactMap { line in
+                line.split(separator: " ").first.flatMap { Int32($0) }
+            })
         }
+    }
+
+    /// Counts processes whose command line matches the given pattern.
+    ///
+    /// Uses `pgrep -l -f <pattern>` to search the full command line of
+    /// all running processes. Excludes our own PID and the pgrep process.
+    private nonisolated static func countProcesses(matching pattern: String) -> ProcessCheckResult {
+        let t = Process(); t.executableURL = URL(filePath: "/usr/bin/pgrep")
+        t.arguments = ["-l", "-f", pattern]
+        let pipe = Pipe()
+        t.standardOutput = pipe; t.standardError = FileHandle.nullDevice
+        try? t.run(); t.waitUntilExit()
 
         let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
         let ourPID = String(ProcessInfo.processInfo.processIdentifier)
 
-        let matched = output
-            .components(separatedBy: .newlines)
+        let lines = output
+            .components(separatedBy: "\n")
+            .filter { !$0.isEmpty }
             .filter { line in
-                guard !line.isEmpty else { return false }
-                // Exclude our own process
-                let tokens = line.trimmingCharacters(in: .whitespaces).split(separator: " ", maxSplits: 1)
-                if let pid = tokens.first, pid == ourPID { return false }
-                return line.contains(prefixPath)
+                let pid = line.split(separator: " ").first.map(String.init) ?? ""
+                return pid != ourPID
             }
+            .filter { !$0.lowercased().contains("pgrep") }
 
-        return (matched.count, matched)
+        return ProcessCheckResult(count: lines.count, lines: lines)
     }
 
-    /// Kills the Wine server for the prefix. Runs on a background thread.
+    /// Kills the Wine server for the prefix.
     private nonisolated static func killWineServer(wineserverPath: String, prefixPath: String) {
         let process = Process()
         process.executableURL = URL(filePath: wineserverPath)

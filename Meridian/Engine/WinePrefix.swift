@@ -207,6 +207,41 @@ struct WinePrefix: Sendable {
         return result
     }
 
+    /// Reads the Steam appmanifest for a game and returns the `installdir` value.
+    ///
+    /// The installdir is the folder name under `steamapps/common/` where the
+    /// game is installed (e.g. "Animal Well"). This is used as a `pgrep -f`
+    /// pattern to detect whether the game process is running, since Wine on
+    /// macOS exposes Windows-style paths in process listings.
+    func gameInstallDir(appID: Int) -> String? {
+        let manifest = steamInstallDir
+            .appending(path: "steamapps/appmanifest_\(appID).acf")
+        let manifestPath = manifest.path(percentEncoded: false)
+
+        guard let contents = try? String(contentsOfFile: manifestPath, encoding: .utf8) else {
+            log.warning("[gameInstallDir] cannot read manifest at \(manifestPath)")
+            return nil
+        }
+
+        for line in contents.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("\"installdir\"") else { continue }
+
+            let parts = trimmed.components(separatedBy: "\t").filter { !$0.isEmpty }
+            guard parts.count >= 2 else { continue }
+            let value = parts.last!
+                .trimmingCharacters(in: .whitespaces)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+
+            guard !value.isEmpty else { continue }
+            log.info("[gameInstallDir] appID=\(appID) → \"\(value)\"")
+            return value
+        }
+
+        log.warning("[gameInstallDir] 'installdir' not found in manifest for appID=\(appID)")
+        return nil
+    }
+
     /// Deletes the entire prefix directory. Use when the prefix is corrupted
     /// or Steam install is in a bad state. A fresh prefix will be created
     /// on the next launch.

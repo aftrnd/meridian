@@ -11,6 +11,7 @@ struct MeridianApp: App {
     @State private var steamManager  = WineSteamManager()
     @State private var sessionBridge = SteamSessionBridge()
     @State private var launcher      = GameLauncher()
+    @State private var bootstrap     = BootstrapManager()
 
     var body: some Scene {
         WindowGroup {
@@ -21,10 +22,10 @@ struct MeridianApp: App {
                 .environment(steamManager)
                 .environment(sessionBridge)
                 .environment(launcher)
-                .frame(minWidth: 960, minHeight: 620)
+                .environment(bootstrap)
         }
         .windowStyle(.hiddenTitleBar)
-        .defaultSize(width: 1130, height: 620)
+        .defaultSize(width: 480, height: 300)
         .commands {
             CommandGroup(replacing: .newItem) {}
             CommandMenu("Meridian") {

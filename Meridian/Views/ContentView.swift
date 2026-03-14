@@ -17,22 +17,24 @@ struct ContentView: View {
     @Environment(WineSteamManager.self) private var steamManager
     @Environment(SteamSessionBridge.self) private var sessionBridge
     @Environment(GameLauncher.self) private var launcher
+    @Environment(BootstrapManager.self) private var bootstrap
 
     @State private var selectedGame: Game?
     @State private var columnVisibility = NavigationSplitViewVisibility.all
     @State private var sidebarDestination: SidebarDestination = .library(.all)
+    @State private var hasAnimatedToFullSize = false
+    @State private var splashVisible = true
 
     var body: some View {
         Group {
-            if !steamAuth.isAuthenticated {
+            if splashVisible {
+                SplashView()
+            } else if !steamAuth.isAuthenticated {
                 AuthView()
             } else {
                 mainContent
                     .task {
                         await library.refresh(steamID: steamAuth.steamID, apiKey: steamAuth.apiKey)
-                    }
-                    .task(id: engine.isReady) {
-                        await warmupLaunchPipeline()
                     }
                     .sheet(isPresented: Binding(
                         get: { steamAuth.needsAPIKey },
@@ -48,13 +50,25 @@ struct ContentView: View {
                     }
             }
         }
-        .frame(minWidth: 960, minHeight: 620)
+        .onChange(of: bootstrap.isReady) { _, ready in
+            if ready && !hasAnimatedToFullSize {
+                hasAnimatedToFullSize = true
+                // Post immediately so the window animation starts in sync with the
+                // SplashView blur/fade (both triggered by bootstrap.isReady).
+                NotificationCenter.default.post(name: .meridianBootstrapReady, object: nil)
+                // Delay the view switch until the 0.3s fade animation finishes
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    splashVisible = false
+                }
+            }
+        }
     }
 
     @ViewBuilder
     private var mainContent: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView(selectedDestination: $sidebarDestination)
+                .navigationSplitViewColumnWidth(min: 220, ideal: 220, max: .infinity)
         } detail: {
             detailContent
         }
@@ -80,39 +94,10 @@ struct ContentView: View {
             SteamWebView(url: URL(string: "https://store.steampowered.com")!)
         }
     }
+}
 
-    /// Pre-warms the Wine environment on app launch so game starts are near-instant.
-    /// Runs steps 1-5 of the launch pipeline in the background without launching a game.
-    /// By the time the user clicks Play, only the actual steam.exe -applaunch needs to run.
-    private func warmupLaunchPipeline() async {
-        guard engine.isReady else { return }
-
-        switch launcher.launchState {
-        case .idle, .exited, .failed:
-            break
-        default:
-            return
-        }
-
-        let prefix = WinePrefix.defaultPrefix
-
-        if !prefix.exists {
-            try? await prefix.create(engine: engine)
-        }
-        guard !Task.isCancelled else { return }
-
-        if prefix.exists && !prefix.isSteamInstalled {
-            try? await prefix.installSteam(engine: engine)
-        }
-        guard !Task.isCancelled else { return }
-
-        if prefix.isSteamInstalled && steamManager.needsBootstrap(prefix: prefix) {
-            try? await steamManager.bootstrap(engine: engine, prefix: prefix)
-        }
-        guard !Task.isCancelled else { return }
-
-        _ = await sessionBridge.prepare(prefix: prefix)
-    }
+extension Notification.Name {
+    static let meridianBootstrapReady = Notification.Name("meridianBootstrapReady")
 }
 
 // MARK: - Sidebar
@@ -234,4 +219,5 @@ struct GlassRoundedBackground: ViewModifier {
         .environment(WineSteamManager())
         .environment(SteamSessionBridge())
         .environment(GameLauncher())
+        .environment(BootstrapManager())
 }
