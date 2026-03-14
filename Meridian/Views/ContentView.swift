@@ -134,10 +134,10 @@ private struct SidebarView: View {
             }
 
             Section("Steam") {
-                Label("Profile", systemImage: "person.crop.circle")
-                    .tag(SidebarDestination.steamProfile)
                 Label("Store", systemImage: "cart")
                     .tag(SidebarDestination.steamStore)
+                Label("Profile", systemImage: "person.crop.circle")
+                    .tag(SidebarDestination.steamProfile)
             }
         }
         .listStyle(.sidebar)

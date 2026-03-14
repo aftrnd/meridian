@@ -17,8 +17,8 @@ struct SteamWebView: View {
             canGoBack: $canGoBack,
             canGoForward: $canGoForward
         )
-        .clipShape(RoundedRectangle(cornerRadius: 18))
-        .padding(10)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .padding(16)
         .ignoresSafeArea(edges: [.top, .bottom])
         .navigationTitle("")
         .overlay(alignment: .topLeading) {
@@ -30,8 +30,8 @@ struct SteamWebView: View {
                         .foregroundStyle(.primary)
                 }
                 .buttonStyle(.plain)
-                .padding(.top, 18)
-                .padding(.leading, 18)
+                .padding(.top, 24)
+                .padding(.leading, 24)
                 .help("Back")
             }
         }
