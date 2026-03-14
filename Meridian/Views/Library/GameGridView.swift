@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 // MARK: - Game Card State
 
@@ -75,11 +76,19 @@ struct GameGridView: View {
                 .opacity(isHovered ? 1 : 0)
                 .allowsHitTesting(false)
         }
-        .background(
-            GeometryReader { geo in
-                Color.clear.onAppear { cardSize = geo.size }
-            }
-        )
+        .background {
+            MouseTrackingView(
+                onHover: { point in
+                    if let point {
+                        hoverLocation = point
+                        isHovered = true
+                    } else {
+                        isHovered = false
+                    }
+                },
+                onResize: { cardSize = $0 }
+            )
+        }
         .rotation3DEffect(
             .degrees(tiltX),
             axis: (x: 1, y: 0, z: 0),
@@ -98,16 +107,11 @@ struct GameGridView: View {
         )
         .animation(.easeOut(duration: 0.15), value: isHovered)
         .animation(.interactiveSpring(response: 0.15, dampingFraction: 0.7), value: hoverLocation)
-        .onContinuousHover { phase in
-            switch phase {
-            case .active(let location):
-                hoverLocation = location
-                isHovered = true
-            case .ended:
-                isHovered = false
-            }
-        }
         .contentShape(Rectangle())
+        .onDisappear {
+            isHovered = false
+            hoverLocation = .zero
+        }
         .onAppear { updatePulse() }
         .onChange(of: gameState) { _, _ in updatePulse() }
     }
@@ -290,6 +294,87 @@ struct WindowsBadge: View {
             .padding(.horizontal, 5)
             .padding(.vertical, 2)
             .background(Color.indigo, in: Capsule())
+    }
+}
+
+// MARK: - AppKit mouse tracking
+
+private struct MouseTrackingView: NSViewRepresentable {
+    var onHover: (CGPoint?) -> Void
+    var onResize: (CGSize) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> TrackingNSView {
+        let view = TrackingNSView(coordinator: context.coordinator)
+        context.coordinator.onHover = onHover
+        context.coordinator.onResize = onResize
+        return view
+    }
+
+    func updateNSView(_ nsView: TrackingNSView, context: Context) {
+        context.coordinator.onHover = onHover
+        context.coordinator.onResize = onResize
+    }
+
+    final class Coordinator {
+        var onHover: ((CGPoint?) -> Void)?
+        var onResize: ((CGSize) -> Void)?
+    }
+
+    final class TrackingNSView: NSView {
+        private let coordinator: Coordinator
+        private var currentArea: NSTrackingArea?
+
+        init(coordinator: Coordinator) {
+            self.coordinator = coordinator
+            super.init(frame: .zero)
+        }
+
+        required init?(coder: NSCoder) { fatalError() }
+
+        override var isFlipped: Bool { true }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if window == nil { coordinator.onHover?(nil) }
+        }
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            if let currentArea { removeTrackingArea(currentArea) }
+            let area = NSTrackingArea(
+                rect: bounds,
+                options: [.mouseEnteredAndExited, .mouseMoved,
+                          .activeInKeyWindow, .inVisibleRect],
+                owner: self
+            )
+            addTrackingArea(area)
+            currentArea = area
+        }
+
+        override func layout() {
+            super.layout()
+            coordinator.onResize?(bounds.size)
+        }
+
+        override func mouseEntered(with event: NSEvent) {
+            coordinator.onHover?(convert(event.locationInWindow, from: nil))
+        }
+
+        override func mouseMoved(with event: NSEvent) {
+            coordinator.onHover?(convert(event.locationInWindow, from: nil))
+        }
+
+        override func mouseExited(with event: NSEvent) {
+            guard let window else {
+                coordinator.onHover?(nil)
+                return
+            }
+            let mouse = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+            guard !bounds.contains(mouse) else { return }
+            coordinator.onHover?(nil)
+        }
     }
 }
 

@@ -55,10 +55,8 @@ struct ContentView: View {
     private var mainContent: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView(selectedDestination: $sidebarDestination)
-                .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 220)
         } detail: {
             detailContent
-                .navigationSplitViewColumnWidth(min: 720, ideal: 980)
         }
         .onChange(of: sidebarDestination) { _, newValue in
             if case .library(let filter) = newValue {
@@ -144,42 +142,6 @@ private struct SidebarView: View {
         }
         .listStyle(.sidebar)
         .navigationTitle("Meridian")
-        .labelStyle(SidebarLabelStyle())
-        .safeAreaInset(edge: .bottom) {
-            profileRow
-        }
-    }
-
-    // MARK: - Profile Row
-
-    private var profileRow: some View {
-        HStack(spacing: 10) {
-            AsyncImage(url: steamAuth.avatarURL) { phase in
-                if case .success(let image) = phase {
-                    image.resizable().scaledToFill()
-                } else {
-                    Image(systemName: "person.circle.fill")
-                        .resizable()
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .frame(width: 28, height: 28)
-            .clipShape(Circle())
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text(steamAuth.displayName.isEmpty ? "Steam User" : steamAuth.displayName)
-                    .font(.caption)
-                    .fontWeight(.medium)
-                    .lineLimit(1)
-                Text("Steam")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-            }
-
-            Spacer()
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
     }
 
     private func filterIcon(_ filter: SteamLibraryStore.LibraryFilter) -> String {
@@ -188,20 +150,6 @@ private struct SidebarView: View {
         case .recent:    return "clock"
         case .installed: return "internaldrive"
         case .favorites: return "heart.fill"
-        }
-    }
-}
-
-// MARK: - Sidebar label style
-
-private struct SidebarLabelStyle: LabelStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        HStack(spacing: 6) {
-            configuration.icon
-                .font(.system(size: 16, weight: .regular))
-                .frame(width: 22, alignment: .center)
-            configuration.title
-                .font(.body)
         }
     }
 }
