@@ -1,13 +1,26 @@
 import SwiftUI
+import AppKit
+
+// MARK: - Sidebar Navigation
+
+enum SidebarDestination: Hashable {
+    case library(SteamLibraryStore.LibraryFilter)
+    case search
+    case steamProfile
+    case steamStore
+}
 
 struct ContentView: View {
     @Environment(SteamAuthService.self) private var steamAuth
     @Environment(SteamLibraryStore.self) private var library
     @Environment(WineEngine.self) private var engine
+    @Environment(WineSteamManager.self) private var steamManager
+    @Environment(SteamSessionBridge.self) private var sessionBridge
+    @Environment(GameLauncher.self) private var launcher
 
     @State private var selectedGame: Game?
     @State private var columnVisibility = NavigationSplitViewVisibility.all
-    @State private var showEngineSetup = false
+    @State private var sidebarDestination: SidebarDestination = .library(.all)
 
     var body: some View {
         Group {
@@ -18,20 +31,20 @@ struct ContentView: View {
                     .task {
                         await library.refresh(steamID: steamAuth.steamID, apiKey: steamAuth.apiKey)
                     }
+                    .task(id: engine.isReady) {
+                        await warmupLaunchPipeline()
+                    }
                     .sheet(isPresented: Binding(
                         get: { steamAuth.needsAPIKey },
                         set: { _ in }
                     )) {
                         APIKeySetupSheet()
                     }
-                    .sheet(isPresented: $showEngineSetup) {
-                        EngineSetupView()
-                            .environment(engine)
-                    }
                     .sheet(item: $selectedGame) { game in
                         GameDetailView(game: game) {
                             selectedGame = nil
                         }
+                        .presentationSizing(.fitted)
                     }
             }
         }
@@ -41,43 +54,103 @@ struct ContentView: View {
     @ViewBuilder
     private var mainContent: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
-            SidebarView(selectedFilter: Binding(
-                get: { library.filter },
-                set: { library.filter = $0 }
-            ))
-            .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 220)
+            SidebarView(selectedDestination: $sidebarDestination)
+                .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 220)
         } detail: {
-            LibraryView(selectedGame: $selectedGame)
+            detailContent
                 .navigationSplitViewColumnWidth(min: 720, ideal: 980)
-                .safeAreaInset(edge: .bottom) {
-                    HStack {
-                        Spacer()
-                        EngineStatusPill(onSetUp: { showEngineSetup = true })
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 8)
-                }
         }
+        .onChange(of: sidebarDestination) { _, newValue in
+            if case .library(let filter) = newValue {
+                library.filter = filter
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var detailContent: some View {
+        switch sidebarDestination {
+        case .library:
+            LibraryView(selectedGame: $selectedGame)
+        case .search:
+            SearchView(selectedGame: $selectedGame)
+        case .steamProfile:
+            if !steamAuth.steamID.isEmpty {
+                SteamWebView(url: URL(string: "https://steamcommunity.com/profiles/\(steamAuth.steamID)")!)
+            }
+        case .steamStore:
+            SteamWebView(url: URL(string: "https://store.steampowered.com")!)
+        }
+    }
+
+    /// Pre-warms the Wine environment on app launch so game starts are near-instant.
+    /// Runs steps 1-5 of the launch pipeline in the background without launching a game.
+    /// By the time the user clicks Play, only the actual steam.exe -applaunch needs to run.
+    private func warmupLaunchPipeline() async {
+        guard engine.isReady else { return }
+
+        switch launcher.launchState {
+        case .idle, .exited, .failed:
+            break
+        default:
+            return
+        }
+
+        let prefix = WinePrefix.defaultPrefix
+
+        if !prefix.exists {
+            try? await prefix.create(engine: engine)
+        }
+        guard !Task.isCancelled else { return }
+
+        if prefix.exists && !prefix.isSteamInstalled {
+            try? await prefix.installSteam(engine: engine)
+        }
+        guard !Task.isCancelled else { return }
+
+        if prefix.isSteamInstalled && steamManager.needsBootstrap(prefix: prefix) {
+            try? await steamManager.bootstrap(engine: engine, prefix: prefix)
+        }
+        guard !Task.isCancelled else { return }
+
+        _ = await sessionBridge.prepare(prefix: prefix)
     }
 }
 
 // MARK: - Sidebar
 
 private struct SidebarView: View {
-    @Binding var selectedFilter: SteamLibraryStore.LibraryFilter
+    @Binding var selectedDestination: SidebarDestination
     @Environment(SteamAuthService.self) private var steamAuth
 
     var body: some View {
-        List(SteamLibraryStore.LibraryFilter.allCases, selection: $selectedFilter) { filter in
-            Label(filter.rawValue, systemImage: filterIcon(filter))
-                .tag(filter)
+        List(selection: $selectedDestination) {
+            Label("Search", systemImage: "magnifyingglass")
+                .tag(SidebarDestination.search)
+
+            Section("Library") {
+                ForEach(SteamLibraryStore.LibraryFilter.allCases) { filter in
+                    Label(filter.rawValue, systemImage: filterIcon(filter))
+                        .tag(SidebarDestination.library(filter))
+                }
+            }
+
+            Section("Steam") {
+                Label("Profile", systemImage: "person.crop.circle")
+                    .tag(SidebarDestination.steamProfile)
+                Label("Store", systemImage: "cart")
+                    .tag(SidebarDestination.steamStore)
+            }
         }
         .listStyle(.sidebar)
         .navigationTitle("Meridian")
+        .labelStyle(SidebarLabelStyle())
         .safeAreaInset(edge: .bottom) {
             profileRow
         }
     }
+
+    // MARK: - Profile Row
 
     private var profileRow: some View {
         HStack(spacing: 10) {
@@ -119,6 +192,20 @@ private struct SidebarView: View {
     }
 }
 
+// MARK: - Sidebar label style
+
+private struct SidebarLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 6) {
+            configuration.icon
+                .font(.system(size: 16, weight: .regular))
+                .frame(width: 22, alignment: .center)
+            configuration.title
+                .font(.body)
+        }
+    }
+}
+
 // MARK: - Engine Status Pill
 
 private struct EngineStatusPill: View {
@@ -143,8 +230,7 @@ private struct EngineStatusPill: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(.regularMaterial, in: Capsule())
-        .overlay(Capsule().strokeBorder(.separator, lineWidth: 0.5))
+        .modifier(GlassCapsuleBackground())
     }
 
     private var dotColor: Color {
@@ -164,6 +250,34 @@ private struct EngineStatusPill: View {
     }
 }
 
+// MARK: - Glass Effect Backgrounds
+
+struct GlassCapsuleBackground: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            content.glassEffect(.regular.interactive(), in: .capsule)
+        } else {
+            content
+                .background(.regularMaterial, in: Capsule())
+                .overlay(Capsule().strokeBorder(.separator, lineWidth: 0.5))
+        }
+    }
+}
+
+struct GlassRoundedBackground: ViewModifier {
+    var cornerRadius: CGFloat = 10
+
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            content.glassEffect(.regular.interactive(), in: .rect(cornerRadius: cornerRadius))
+        } else {
+            content
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius))
+                .overlay(RoundedRectangle(cornerRadius: cornerRadius).strokeBorder(.separator, lineWidth: 0.5))
+        }
+    }
+}
+
 #Preview {
     ContentView()
         .environment(SteamAuthService())
@@ -171,4 +285,5 @@ private struct EngineStatusPill: View {
         .environment(WineEngine())
         .environment(WineSteamManager())
         .environment(SteamSessionBridge())
+        .environment(GameLauncher())
 }

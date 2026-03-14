@@ -24,7 +24,7 @@ struct MeridianApp: App {
                 .frame(minWidth: 960, minHeight: 620)
         }
         .windowStyle(.hiddenTitleBar)
-        .defaultSize(width: 1200, height: 760)
+        .defaultSize(width: 1130, height: 620)
         .commands {
             CommandGroup(replacing: .newItem) {}
             CommandMenu("Meridian") {
@@ -46,6 +46,7 @@ struct MeridianApp: App {
             SettingsView()
                 .environment(steamAuth)
                 .environment(engine)
+                .environment(library)
         }
     }
 }

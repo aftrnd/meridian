@@ -21,6 +21,7 @@ struct SettingsView: View {
 
 private struct SteamSettingsTab: View {
     @Environment(SteamAuthService.self) private var steamAuth
+    @Environment(SteamLibraryStore.self) private var library
     @State private var apiKeyInput: String = ""
     @State private var isValidating = false
     @State private var validationMessage: String?
@@ -58,6 +59,14 @@ private struct SteamSettingsTab: View {
                     Text("Not signed in.")
                         .foregroundStyle(.secondary)
                 }
+            }
+
+            Section("Library") {
+                @Bindable var library = library
+                Toggle("Show Hidden Games", isOn: $library.showHiddenGames)
+                Text("Hidden games are still tracked — they just won't appear in your library.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section {
