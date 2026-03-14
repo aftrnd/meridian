@@ -1,6 +1,11 @@
 import SwiftUI
 import AppKit
 
+private enum GameDetailMetrics {
+    static let launchButtonHeight: CGFloat = 24
+    static let launchButtonMinWidth: CGFloat = 140
+}
+
 struct GameDetailView: View {
     let game: Game
     let onDismiss: () -> Void
@@ -12,6 +17,7 @@ struct GameDetailView: View {
     @Environment(SteamSessionBridge.self) private var sessionBridge
     @Environment(GameLauncher.self)       private var launcher
     @Environment(\.openWindow)            private var openWindow
+    @Environment(\.controlActiveState)    private var controlActiveState
 
     @State private var showEngineSetup = false
     @State private var showResetConfirm = false
@@ -231,7 +237,7 @@ struct GameDetailView: View {
             Button("Done") { onDismiss() }
                 .keyboardShortcut(.defaultAction)
                 .keyboardShortcut(.cancelAction)
-                .buttonStyle(.borderedProminent)
+                .inactiveAwareProminence(controlActiveState == .inactive)
                 .controlSize(.large)
         }
         .padding(.trailing, 20)
@@ -419,10 +425,12 @@ struct GameDetailView: View {
                 Button {} label: {
                     Label("Running", systemImage: "play.circle.fill")
                         .font(.headline)
-                        .frame(minWidth: 130)
+                        .frame(
+                            minWidth: GameDetailMetrics.launchButtonMinWidth,
+                            minHeight: GameDetailMetrics.launchButtonHeight
+                        )
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.green)
+                .inactiveAwareProminence(controlActiveState == .inactive)
                 .controlSize(.large)
                 .disabled(true)
 
@@ -438,21 +446,28 @@ struct GameDetailView: View {
                     if !engine.isReady {
                         Button { showEngineSetup = true } label: {
                             Label("Set Up Engine…", systemImage: "arrow.down.circle")
-                                .frame(minWidth: 130)
+                                .frame(
+                                    minWidth: GameDetailMetrics.launchButtonMinWidth,
+                                    minHeight: GameDetailMetrics.launchButtonHeight
+                                )
                         }
-                        .buttonStyle(.borderedProminent)
+                        .inactiveAwareProminence(controlActiveState == .inactive)
                         .controlSize(.large)
                     } else {
                         Button { handlePlayTapped() } label: {
                             Label("Retry", systemImage: "arrow.clockwise")
-                                .frame(minWidth: 130)
+                                .frame(
+                                    minWidth: GameDetailMetrics.launchButtonMinWidth,
+                                    minHeight: GameDetailMetrics.launchButtonHeight
+                                )
                         }
-                        .buttonStyle(.borderedProminent)
+                        .inactiveAwareProminence(controlActiveState == .inactive)
                         .controlSize(.large)
                     }
 
                     Button { showResetConfirm = true } label: {
                         Label("Reset", systemImage: "trash")
+                            .frame(minHeight: GameDetailMetrics.launchButtonHeight)
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.large)
@@ -474,9 +489,12 @@ struct GameDetailView: View {
                 systemImage: currentGame.isInstalled ? "play.fill" : "arrow.down.circle.fill"
             )
             .font(.headline)
-            .frame(minWidth: 130)
+            .frame(
+                minWidth: GameDetailMetrics.launchButtonMinWidth,
+                minHeight: GameDetailMetrics.launchButtonHeight
+            )
         }
-        .buttonStyle(.borderedProminent)
+        .inactiveAwareProminence(controlActiveState == .inactive)
         .controlSize(.large)
         .disabled(!steamAuth.isAuthenticated || isLauncherBusyWithOtherGame)
         .help(isLauncherBusyWithOtherGame ? "Stop the current game before launching another" : "")
@@ -495,6 +513,7 @@ struct GameDetailView: View {
             Task { await launcher.cancelLaunch(engine: engine, steamManager: steamManager) }
         } label: {
             Label("Cancel", systemImage: "xmark")
+                .frame(minHeight: GameDetailMetrics.launchButtonHeight)
         }
         .buttonStyle(.bordered)
         .controlSize(.large)
@@ -505,6 +524,7 @@ struct GameDetailView: View {
             Task { await launcher.stopGame(engine: engine, steamManager: steamManager) }
         } label: {
             Label("Stop", systemImage: "stop.fill")
+                .frame(minHeight: GameDetailMetrics.launchButtonHeight)
         }
         .buttonStyle(.bordered)
         .controlSize(.large)
@@ -581,6 +601,7 @@ private struct NotInstalledBadge: View {
 private struct ProgressButton: View {
     let title: String
     init(_ title: String) { self.title = title }
+    @Environment(\.controlActiveState) private var controlActiveState
 
     var body: some View {
         Button {} label: {
@@ -592,11 +613,25 @@ private struct ProgressButton: View {
                     .font(.headline)
                     .lineLimit(1)
             }
-            .frame(minWidth: 130)
+            .frame(
+                minWidth: GameDetailMetrics.launchButtonMinWidth,
+                minHeight: GameDetailMetrics.launchButtonHeight
+            )
         }
-        .buttonStyle(.borderedProminent)
+        .inactiveAwareProminence(controlActiveState == .inactive)
         .controlSize(.large)
         .disabled(true)
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func inactiveAwareProminence(_ inactive: Bool) -> some View {
+        if inactive {
+            self.buttonStyle(.bordered)
+        } else {
+            self.buttonStyle(.borderedProminent)
+        }
     }
 }
 

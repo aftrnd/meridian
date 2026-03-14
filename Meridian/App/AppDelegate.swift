@@ -21,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // Sets the main window to the canonical launch size and centers it,
     // and disables NSWindow's automatic frame-save so a previous user
     // resize never overrides this size on the next launch.
+    @MainActor
     private func enforceMainWindowLaunchFrame() {
         guard let window = NSApp.windows.first(where: {
             !$0.isSheet && $0.styleMask.contains(.titled)

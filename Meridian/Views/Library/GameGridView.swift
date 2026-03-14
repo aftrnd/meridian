@@ -15,6 +15,8 @@ struct GameGridView: View {
     let game: Game
     let isSelected: Bool
     var isFavorite: Bool = false
+    /// When false, the heart badge is hidden (e.g. on the Favorites tab where it's redundant).
+    var showFavoriteBadge: Bool = true
     var gameState: GameCardState = .idle
 
     @State private var isHovered = false
@@ -210,7 +212,7 @@ struct GameGridView: View {
 
     @ViewBuilder
     private var trailingBadges: some View {
-        if isFavorite {
+        if isFavorite, showFavoriteBadge {
             Image(systemName: "heart.fill")
                 .font(.caption2)
                 .foregroundStyle(.white)

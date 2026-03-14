@@ -34,6 +34,7 @@ struct LibraryView: View {
                         game: game,
                         isSelected: selectedGame?.id == game.id,
                         isFavorite: library.isFavorite(appID: game.id),
+                        showFavoriteBadge: library.filter != .favorites,
                         gameState: gameState(for: game)
                     )
                         .onTapGesture { selectedGame = game }

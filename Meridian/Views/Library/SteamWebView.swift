@@ -42,11 +42,6 @@ struct SteamWebView: View {
 @MainActor
 final class WebViewStore {
     var webView: WKWebView?
-
-    /// Shared across all SteamWebView instances so cookies and login sessions persist.
-    /// Without this, each web view would get an independent process pool and the user
-    /// would need to sign in separately on Profile vs Store pages.
-    static let sharedProcessPool = WKProcessPool()
 }
 
 private struct WebViewRepresentable: NSViewRepresentable {
@@ -58,7 +53,6 @@ private struct WebViewRepresentable: NSViewRepresentable {
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
-        config.processPool = WebViewStore.sharedProcessPool
         config.websiteDataStore = .default()
         config.applicationNameForUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
 
@@ -117,9 +111,8 @@ private struct WebViewRepresentable: NSViewRepresentable {
 
         func webView(
             _ webView: WKWebView,
-            decidePolicyFor navigationAction: WKNavigationAction,
-            decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
-        ) {
+            decidePolicyFor navigationAction: WKNavigationAction
+        ) async -> WKNavigationActionPolicy {
             if let url = navigationAction.request.url,
                navigationAction.navigationType == .linkActivated,
                let host = url.host,
@@ -127,10 +120,9 @@ private struct WebViewRepresentable: NSViewRepresentable {
                !host.contains("steamcommunity.com"),
                !host.contains("steamstatic.com") {
                 NSWorkspace.shared.open(url)
-                decisionHandler(.cancel)
-                return
+                return .cancel
             }
-            decisionHandler(.allow)
+            return .allow
         }
     }
 }
