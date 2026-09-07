@@ -46,8 +46,8 @@ struct CachedAsyncImage<Content: View>: View {
         }
 
         for tryURL in urlsToTry {
-            // Two-tier cache: memory then disk.
-            if let cached = ImageCache.shared.image(for: tryURL) {
+            // Two-tier cache: memory then disk (disk read + decode off-main).
+            if let cached = await ImageCache.shared.imageAsync(for: tryURL) {
                 phase = .success(Image(nsImage: cached))
                 return
             }
@@ -56,7 +56,7 @@ struct CachedAsyncImage<Content: View>: View {
             do {
                 let (data, response) = try await URLSession.imageSession.data(from: tryURL)
                 if let http = response as? HTTPURLResponse, http.statusCode != 200 { continue }
-                guard let nsImage = NSImage(data: data) else { continue }
+                guard let nsImage = await ImageCache.decode(data) else { continue }
                 ImageCache.shared.store(nsImage, for: tryURL, rawData: data)
                 phase = .success(Image(nsImage: nsImage))
                 return
@@ -112,10 +112,28 @@ final class ImageCache: @unchecked Sendable {
         memory.object(forKey: url as NSURL)
     }
 
-    /// Full two-tier lookup: memory first, then disk. Safe from any thread/actor.
+    /// Full two-tier lookup: memory first, then disk. Synchronous — the disk
+    /// read blocks the calling thread, so prefer `imageAsync(for:)` from
+    /// @MainActor (view) code.
     func image(for url: URL) -> NSImage? {
         if let cached = memory.object(forKey: url as NSURL) { return cached }
         return readFromDisk(url: url)
+    }
+
+    /// Two-tier lookup whose disk read + decode run off the caller's actor
+    /// (nonisolated async), keeping the main thread free of file I/O.
+    func imageAsync(for url: URL) async -> NSImage? {
+        if let cached = memory.object(forKey: url as NSURL) { return cached }
+        return readFromDisk(url: url)
+    }
+
+    /// Decodes raw image bytes off the caller's actor (nonisolated async).
+    /// Use instead of `NSImage(data:)` in @MainActor code.
+    static func decode(_ data: Data) async -> NSImage? {
+        guard let image = NSImage(data: data) else { return nil }
+        // Force bitmap decompression now, off-main, so first draw is cheap.
+        _ = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        return image
     }
 
     /// Stores the image in memory immediately and schedules an async disk write.
@@ -145,8 +163,10 @@ final class ImageCache: @unchecked Sendable {
 
     private func readFromDisk(url: URL) -> NSImage? {
         let fileURL = diskFileURL(for: url)
-        guard FileManager.default.fileExists(atPath: fileURL.path),
-              let image = NSImage(contentsOf: fileURL) else { return nil }
+        // NSImage(contentsOf:) returns nil for missing files — no fileExists pre-check needed.
+        guard let image = NSImage(contentsOf: fileURL) else { return nil }
+        // Force bitmap decompression here (callers are off-main) so first draw is cheap.
+        _ = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
         memory.setObject(image, forKey: url as NSURL)
         return image
     }

@@ -258,8 +258,8 @@ struct HeroBannerImage: View {
 
     private func loadImage() async {
         for url in urls {
-            // Two-tier cache check (memory + disk).
-            if let cached = ImageCache.shared.image(for: url) {
+            // Two-tier cache check (memory + disk); disk read + decode off-main.
+            if let cached = await ImageCache.shared.imageAsync(for: url) {
                 loadedImage = cached
                 emitSize(for: cached)
                 return
@@ -269,7 +269,7 @@ struct HeroBannerImage: View {
             do {
                 let (data, response) = try await URLSession.imageSession.data(from: url)
                 if let http = response as? HTTPURLResponse, http.statusCode != 200 { continue }
-                guard let nsImage = NSImage(data: data) else { continue }
+                guard let nsImage = await ImageCache.decode(data) else { continue }
                 ImageCache.shared.store(nsImage, for: url, rawData: data)
                 loadedImage = nsImage
                 emitSize(for: nsImage)

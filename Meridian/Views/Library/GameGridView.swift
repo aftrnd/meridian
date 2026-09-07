@@ -131,9 +131,17 @@ struct GameGridView: View {
             + [game.verticalCapsuleURL]
             + game.verticalCapsuleURLFallbacks
 
-        // Synchronous cache check — avoids a blank flash for previously loaded images.
+        // Memory-tier check is synchronous — avoids a blank flash for previously
+        // loaded images. Disk reads + decodes below run off the main actor.
         for url in urlsToTry {
-            if let cached = ImageCache.shared.image(for: url) {
+            if let cached = ImageCache.shared.memoryImage(for: url) {
+                if loadedImage == nil { loadedImage = cached }
+                return
+            }
+        }
+        for url in urlsToTry {
+            guard !Task.isCancelled else { return }
+            if let cached = await ImageCache.shared.imageAsync(for: url) {
                 if loadedImage == nil { loadedImage = cached }
                 return
             }
@@ -145,7 +153,7 @@ struct GameGridView: View {
             do {
                 let (data, response) = try await URLSession.imageSession.data(from: url)
                 if let http = response as? HTTPURLResponse, http.statusCode != 200 { continue }
-                guard let nsImage = NSImage(data: data) else { continue }
+                guard let nsImage = await ImageCache.decode(data) else { continue }
                 ImageCache.shared.store(nsImage, for: url, rawData: data)
                 loadedImage = nsImage
                 return

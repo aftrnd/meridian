@@ -564,14 +564,14 @@ struct SteamAvatarView: View {
 
     private func load() async {
         guard let url else { return }
-        if let cached = ImageCache.shared.image(for: url) {
+        if let cached = await ImageCache.shared.imageAsync(for: url) {
             image = cached
             return
         }
         do {
             let (data, response) = try await URLSession.imageSession.data(from: url)
             if let http = response as? HTTPURLResponse, http.statusCode != 200 { return }
-            guard let nsImage = NSImage(data: data) else { return }
+            guard let nsImage = await ImageCache.decode(data) else { return }
             ImageCache.shared.store(nsImage, for: url, rawData: data)
             image = nsImage
         } catch {}
@@ -612,14 +612,14 @@ struct SteamImageBackdrop: View {
 
     private func load() async {
         guard let url else { return }
-        if let cached = ImageCache.shared.image(for: url) {
+        if let cached = await ImageCache.shared.imageAsync(for: url) {
             image = cached
             return
         }
         do {
             let (data, response) = try await URLSession.imageSession.data(from: url)
             if let http = response as? HTTPURLResponse, http.statusCode != 200 { return }
-            guard let nsImage = NSImage(data: data) else { return }
+            guard let nsImage = await ImageCache.decode(data) else { return }
             ImageCache.shared.store(nsImage, for: url, rawData: data)
             image = nsImage
         } catch {}

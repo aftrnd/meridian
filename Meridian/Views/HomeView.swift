@@ -86,10 +86,16 @@ struct HomeView: View {
     // MARK: - Content
 
     private var homeContent: some View {
-        ScrollView {
+        // Each access re-filters + re-sorts the whole library; during live
+        // resize the body re-evaluates every frame, so compute these once.
+        let recent = library.recentlyPlayedGames
+        let carousel = Array(recent.prefix(Self.carouselCount))
+        let favorites = library.favoriteGames
+
+        return ScrollView {
             VStack(alignment: .leading, spacing: Self.sectionSpacing) {
-                if !carouselGames.isEmpty {
-                    heroCarousel
+                if !carousel.isEmpty {
+                    heroCarousel(games: carousel)
                 }
 
                 // Inline update notification — sits naturally within the scroll flow
@@ -108,10 +114,10 @@ struct HomeView: View {
                     .animation(.spring(duration: 0.35), value: updateChecker.hasUpdate || updateChecker.hasEngineUpdate)
                 }
 
-                if !library.recentlyPlayedGames.isEmpty {
+                if !recent.isEmpty {
                     GameScrollRow(
                         title: "Recently Played",
-                        games: Array(library.recentlyPlayedGames.prefix(20)),
+                        games: Array(recent.prefix(20)),
                         layoutWidth: rowLayoutWidth,
                         trailingObscured: coverWidth,
                         selectedGameID: selectedGame?.id,
@@ -126,10 +132,10 @@ struct HomeView: View {
                     friendActivitySection
                 }
 
-                if !library.favoriteGames.isEmpty {
+                if !favorites.isEmpty {
                     GameScrollRow(
                         title: "Favorites",
-                        games: library.favoriteGames,
+                        games: favorites,
                         layoutWidth: rowLayoutWidth,
                         trailingObscured: coverWidth,
                         selectedGameID: selectedGame?.id,
@@ -212,8 +218,7 @@ struct HomeView: View {
 
     // MARK: - Hero Carousel
 
-    private var heroCarousel: some View {
-        let games = carouselGames
+    private func heroCarousel(games: [Game]) -> some View {
         let safeIndex = games.isEmpty ? 0 : carouselIndex % games.count
         let game = games.isEmpty ? nil : games[safeIndex]
 
@@ -825,7 +830,7 @@ private struct FriendCard: View {
     private func loadAvatar() async {
         guard let url = friend.avatarMediumURL else { return }
 
-        if let cached = ImageCache.shared.image(for: url) {
+        if let cached = await ImageCache.shared.imageAsync(for: url) {
             avatarImage = cached
             return
         }
@@ -833,7 +838,7 @@ private struct FriendCard: View {
         do {
             let (data, response) = try await URLSession.imageSession.data(from: url)
             if let http = response as? HTTPURLResponse, http.statusCode != 200 { return }
-            guard let nsImage = NSImage(data: data) else { return }
+            guard let nsImage = await ImageCache.decode(data) else { return }
             ImageCache.shared.store(nsImage, for: url, rawData: data)
             avatarImage = nsImage
         } catch {}
