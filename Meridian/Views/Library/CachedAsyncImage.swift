@@ -73,6 +73,37 @@ struct CachedAsyncImage<Content: View>: View {
     }
 }
 
+// MARK: - Ambient art glow
+
+/// Shared ambient-bleed layer: a 3×3 mesh of the art's sampled colors,
+/// blurred outward behind a card. Static GPU layer — no per-frame work.
+/// Light mode gets extra opacity + saturation to survive the white backdrop.
+struct ArtGlowBackground: View {
+    let colors: ImageCache.EdgeColors?
+    var cornerRadius: CGFloat = 12
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        if let c = colors, c.mesh.count == 9 {
+            RoundedRectangle(cornerRadius: cornerRadius)
+                .fill(MeshGradient(
+                    width: 3, height: 3,
+                    points: [
+                        [0, 0], [0.5, 0], [1, 0],
+                        [0, 0.5], [0.5, 0.5], [1, 0.5],
+                        [0, 1], [0.5, 1], [1, 1]
+                    ],
+                    colors: c.mesh
+                ))
+                .blur(radius: 18)
+                .saturation(colorScheme == .dark ? 1.0 : 1.3)
+                .opacity(colorScheme == .dark ? 0.47 : 0.6)
+                .allowsHitTesting(false)
+        }
+    }
+}
+
 // MARK: - ImageCache
 
 /// Thread-safe two-tier image cache: in-memory (NSCache) and persistent disk.
@@ -134,6 +165,69 @@ final class ImageCache: @unchecked Sendable {
         // Force bitmap decompression now, off-main, so first draw is cheap.
         _ = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
         return image
+    }
+
+    // MARK: - Edge color sampling (ambient art glow)
+
+    /// 3×3 grid of colors sampled from an artwork (row-major, top-left →
+    /// bottom-right): corners, edge midpoints, and center. Drives the ambient
+    /// glow behind cards; sampled once and cached by URL.
+    struct EdgeColors: Sendable {
+        /// Exactly 9 colors, row-major from the top-left.
+        let mesh: [Color]
+    }
+
+    private let edgeColorCache = NSCache<NSURL, EdgeColorsBox>()
+    final class EdgeColorsBox: @unchecked Sendable {
+        let colors: EdgeColors
+        init(_ colors: EdgeColors) { self.colors = colors }
+    }
+
+    /// Synchronous cache-only lookup so cards can render the glow immediately
+    /// for previously sampled art.
+    func cachedEdgeColors(for url: URL) -> EdgeColors? {
+        edgeColorCache.object(forKey: url as NSURL)?.colors
+    }
+
+    /// Samples a 3×3 color grid off the caller's actor (nonisolated async) by
+    /// drawing the art into a 3×3 bitmap — microseconds per image, cached by
+    /// URL so it runs once per artwork. Saturation is boosted so the blurred
+    /// glow keeps the art's character instead of washing toward gray.
+    func edgeColors(for image: NSImage, url: URL) async -> EdgeColors? {
+        if let cached = edgeColorCache.object(forKey: url as NSURL) { return cached.colors }
+        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+
+        let side = 3
+        var pixels = [UInt8](repeating: 0, count: side * side * 4)
+        guard let ctx = CGContext(
+            data: &pixels,
+            width: side, height: side,
+            bitsPerComponent: 8, bytesPerRow: side * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        ctx.interpolationQuality = .low
+        ctx.draw(cgImage, in: CGRect(x: 0, y: 0, width: side, height: side))
+
+        func color(_ x: Int, _ y: Int) -> Color {
+            let i = (y * side + x) * 4
+            let ns = NSColor(srgbRed: CGFloat(pixels[i]) / 255,
+                             green: CGFloat(pixels[i + 1]) / 255,
+                             blue: CGFloat(pixels[i + 2]) / 255,
+                             alpha: 1)
+            // Boost saturation ~35% so the glow reflects the art's hues.
+            var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+            ns.getHue(&h, saturation: &s, brightness: &b, alpha: &a)
+            return Color(NSColor(hue: h, saturation: min(1, s * 1.35), brightness: b, alpha: 1))
+        }
+        // CGContext origin is bottom-left → flip rows so mesh is top-first.
+        var mesh: [Color] = []
+        for y in stride(from: side - 1, through: 0, by: -1) {
+            for x in 0..<side { mesh.append(color(x, y)) }
+        }
+        let colors = EdgeColors(mesh: mesh)
+        edgeColorCache.setObject(EdgeColorsBox(colors), forKey: url as NSURL)
+        return colors
     }
 
     /// Stores the image in memory immediately and schedules an async disk write.

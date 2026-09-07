@@ -40,6 +40,8 @@ struct GameDetailView: View {
     /// produced a faint rounded-corner artefact at the clip boundary on macOS 15.
     @State private var bannerImage: NSImage? = nil
     @State private var bannerImageFailed = false
+    /// Sampled banner colors — drives the ambient glow behind the hero card.
+    @State private var bannerGlowColors: ImageCache.EdgeColors?
     @State private var achievements: [GameAchievement] = []
     @State private var achievementsLoading = false
     @State private var achievementsUnavailable = false
@@ -392,6 +394,12 @@ struct GameDetailView: View {
             // Play button (`compatStatusCard`). The banner now shows only the
             // hero art + positioned logo, matching Steam's clean library look.
             .clipShape(RoundedRectangle(cornerRadius: GameDetailMetrics.cardCornerRadius, style: .continuous))
+            // Behind the clipped hero so the blur bleeds past its edges
+            // (added after clipShape → the glow itself is not clipped).
+            .background {
+                ArtGlowBackground(colors: bannerGlowColors,
+                                  cornerRadius: GameDetailMetrics.cardCornerRadius)
+            }
     }
 
     // MARK: - Banner image loading
@@ -407,6 +415,7 @@ struct GameDetailView: View {
                 let r = cached.size.width / cached.size.height
                 if r > 0.05, r < 20 { heroAspectRatio = r }
                 bannerImage = cached
+                bannerGlowColors = await ImageCache.shared.edgeColors(for: cached, url: url)
                 return
             }
         }
@@ -421,6 +430,7 @@ struct GameDetailView: View {
                 let r = img.size.width / img.size.height
                 if r > 0.05, r < 20 { heroAspectRatio = r }
                 bannerImage = img
+                bannerGlowColors = await ImageCache.shared.edgeColors(for: img, url: url)
                 return
             } catch { continue }
         }

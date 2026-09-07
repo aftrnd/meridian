@@ -101,8 +101,8 @@ final class CardLayoutMetricsTests: XCTestCase {
         )
         XCTAssertTrue(grid.contains("static var referenceCardWidth"),
                       "The column step must anchor to the default-window card size.")
-        XCTAssertTrue(grid.contains("static let defaultContentWidth: CGFloat = 810"),
-                      "The anchor must match AppDelegate.fullFrameSize (1030) minus the sidebar (220).")
+        XCTAssertTrue(grid.contains("static let defaultContentWidth: CGFloat = 848"),
+                      "The anchor must match AppDelegate.fullFrameSize (1016) minus the sidebar ideal (168).")
         XCTAssertTrue(grid.contains("floor(containerWidth / (referenceCardWidth + s))"),
                       "Column count must step on the reference card size, not the old 155pt target.")
 

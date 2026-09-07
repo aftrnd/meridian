@@ -29,6 +29,9 @@ struct GameGridView: View {
     /// Pre-populated from cache synchronously so the card never renders blank.
     @State private var loadedImage: NSImage?
     @State private var loadFailed = false
+    /// Corner colors sampled from the art — drives the ambient glow bleed.
+    @State private var glowColors: ImageCache.EdgeColors?
+    @Environment(\.colorScheme) private var colorScheme
 
     private var isRunning: Bool { gameState == .running }
     private var isLaunching: Bool { gameState == .launching || gameState == .stopping }
@@ -136,6 +139,7 @@ struct GameGridView: View {
         for url in urlsToTry {
             if let cached = ImageCache.shared.memoryImage(for: url) {
                 if loadedImage == nil { loadedImage = cached }
+                await sampleGlow(cached, url: url)
                 return
             }
         }
@@ -143,6 +147,7 @@ struct GameGridView: View {
             guard !Task.isCancelled else { return }
             if let cached = await ImageCache.shared.imageAsync(for: url) {
                 if loadedImage == nil { loadedImage = cached }
+                await sampleGlow(cached, url: url)
                 return
             }
         }
@@ -156,6 +161,7 @@ struct GameGridView: View {
                 guard let nsImage = await ImageCache.decode(data) else { continue }
                 ImageCache.shared.store(nsImage, for: url, rawData: data)
                 loadedImage = nsImage
+                await sampleGlow(nsImage, url: url)
                 return
             } catch {
                 continue
@@ -163,6 +169,16 @@ struct GameGridView: View {
         }
 
         loadFailed = true
+    }
+
+    /// Cached corner-color lookup (sync hit for previously sampled art),
+    /// falling back to an off-main 3×3 downsample.
+    private func sampleGlow(_ image: NSImage, url: URL) async {
+        if let cached = ImageCache.shared.cachedEdgeColors(for: url) {
+            glowColors = cached
+        } else {
+            glowColors = await ImageCache.shared.edgeColors(for: image, url: url)
+        }
     }
 
     // MARK: - Art (portrait 2:3)
@@ -206,6 +222,9 @@ struct GameGridView: View {
                 .strokeBorder(cardBorderColor, lineWidth: cardBorderWidth)
         }
         .clipShape(RoundedRectangle(cornerRadius: 12))
+        // Behind the clipped card so the blur bleeds past its edges onto the
+        // background (added after clipShape → the glow itself is not clipped).
+        .background { ArtGlowBackground(colors: glowColors) }
         // Track hover inside the art area using native SwiftUI APIs.
         // onContinuousHover fires on every mouse-move (not just boundary crossing),
         // provides view-local coordinates with no conversion needed, and fires .ended
@@ -403,10 +422,10 @@ struct CardLayoutMetrics {
     static let peekFraction: CGFloat = 0.2
 
     /// The content-column width at the app's DEFAULT window size
-    /// (AppDelegate.fullFrameSize 1030 − sidebar 220). The column-count step
-    /// anchors to this so the default window always shows the canonical
+    /// (AppDelegate.fullFrameSize 1016 − sidebar ideal 168). The column-count
+    /// step anchors to this so the default window always shows the canonical
     /// 5-columns + peek layout.
-    static let defaultContentWidth: CGFloat = 810
+    static let defaultContentWidth: CGFloat = 848
 
     /// The card size at the default window (5 columns + peek at
     /// `defaultContentWidth`, ≈128 pt). This is the ANCHOR for the column
