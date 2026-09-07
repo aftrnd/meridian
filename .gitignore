@@ -37,3 +37,6 @@ Scripts/test-steamcmd-login.sh
 Scripts/HANDOFF-*.md
 Scripts/verified-architecture.md
 /docs/
+
+# Editor
+.vscode/
