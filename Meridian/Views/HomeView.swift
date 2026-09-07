@@ -226,7 +226,7 @@ struct HomeView: View {
             if let game {
                 HeroBannerImage(urls: game.newCDNHeroURLs + [game.heroURL] + game.heroURLFallbacks)
                     .id(game.id)
-                    .transition(.opacity)
+                    .transition(.heroDissolve)
                     .applyBackgroundExtension()
             }
 
@@ -250,7 +250,7 @@ struct HomeView: View {
                 .padding(.trailing, 24)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
                 .id(game.id)
-                .transition(.opacity)
+                .transition(.heroCaption)
             }
 
             // ── Subtitle + button ─────────────────────────────────────────────
@@ -290,7 +290,7 @@ struct HomeView: View {
                 .padding(.bottom, 26.75)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
                 .id(game.id)
-                .transition(.opacity)
+                .transition(.heroCaption)
             }
 
             if games.count > 1 {
@@ -312,7 +312,7 @@ struct HomeView: View {
                 ChevronNavButton(direction: .back, isVisible: true) {
                     let count = carouselGames.count
                     guard count > 1 else { return }
-                    withAnimation(.easeInOut(duration: 0.35)) {
+                    withAnimation(.smooth(duration: 0.7)) {
                         carouselIndex = (carouselIndex - 1 + count) % count
                     }
                     restartCarouselTimer()
@@ -326,7 +326,7 @@ struct HomeView: View {
                 ChevronNavButton(direction: .forward, isVisible: true) {
                     let count = carouselGames.count
                     guard count > 1 else { return }
-                    withAnimation(.easeInOut(duration: 0.35)) {
+                    withAnimation(.smooth(duration: 0.7)) {
                         carouselIndex = (carouselIndex + 1) % count
                     }
                     restartCarouselTimer()
@@ -361,7 +361,8 @@ struct HomeView: View {
             Task { @MainActor in
                 let count = carouselGames.count
                 guard count > 1 else { return }
-                withAnimation(.easeInOut(duration: 0.35)) {
+                // Spring keeps the dissolve frame-rate independent (60/120 Hz).
+                withAnimation(.smooth(duration: 0.7)) {
                     carouselIndex = (carouselIndex + 1) % count
                 }
             }
@@ -450,6 +451,34 @@ struct HomeView: View {
         } label: {
             Label("Hide Game", systemImage: "eye.slash")
         }
+    }
+}
+
+// MARK: - Hero Carousel Transitions
+
+private struct HeroBlurModifier: ViewModifier {
+    let radius: CGFloat
+    func body(content: Content) -> some View { content.blur(radius: radius) }
+}
+
+extension AnyTransition {
+    /// Cinematic dissolve for the hero art: crossfade + defocus. Composites
+    /// entirely on the GPU (opacity + blur) — no layout — so it renders
+    /// full-rate on 60 and 120 Hz displays alike.
+    /// Computed (not stored) — AnyTransition isn't Sendable, so stored statics
+    /// trip strict concurrency.
+    static var heroDissolve: AnyTransition {
+        .modifier(active: HeroBlurModifier(radius: 12), identity: HeroBlurModifier(radius: 0))
+        .combined(with: .opacity)
+    }
+
+    /// Caption tier (logo, subtitle, button): incoming text rises gently
+    /// while fading; outgoing simply fades so the layers never collide.
+    static var heroCaption: AnyTransition {
+        .asymmetric(
+            insertion: .opacity.combined(with: .offset(y: 12)),
+            removal: .opacity
+        )
     }
 }
 
