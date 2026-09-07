@@ -12,6 +12,65 @@ enum SidebarDestination: Hashable {
     case category(UUID)
 }
 
+// MARK: - Detail Zoom Transition
+
+/// iPhone app-open feel, built from scratch (`NavigationTransition.zoom` is
+/// unavailable on macOS): the detail page grows out of the clicked card's
+/// exact art frame — uniform scale anchored at the card's center, with a
+/// rounded-corner mask and fade that resolve as it lands. Close plays the
+/// full reverse back into the card. Pure GPU compositing (scale/opacity/
+/// mask — zero layout), driven by springs, so it renders full-rate on both
+/// 60 Hz and ProMotion displays. The NavigationStack's own push/pop
+/// animation is suppressed via `Transaction`; this owns the motion.
+private struct DetailZoom: ViewModifier {
+    /// Clicked card's art frame in window coords (nil → center fallback).
+    let sourceFrame: CGRect?
+    /// Flipped by the close button; drives the reverse flight.
+    let isClosing: Bool
+    /// Called when the reverse flight lands — performs the actual pop.
+    let onCloseFinished: () -> Void
+
+    @State private var appeared = false
+    @State private var started = false
+    @State private var pageFrame: CGRect = .zero
+
+    private var collapsedScale: CGFloat {
+        guard let s = sourceFrame, pageFrame.width > 1 else { return 0.92 }
+        return max(0.04, s.width / pageFrame.width)
+    }
+
+    private var anchor: UnitPoint {
+        guard let s = sourceFrame, pageFrame.width > 1, pageFrame.height > 1 else { return .center }
+        return UnitPoint(x: (s.midX - pageFrame.minX) / pageFrame.width,
+                         y: (s.midY - pageFrame.minY) / pageFrame.height)
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .clipShape(.rect(cornerRadius: appeared ? 0 : 12))
+            .scaleEffect(appeared ? 1 : collapsedScale, anchor: anchor)
+            .opacity(appeared ? 1 : 0)
+            // Kick off from the geometry callback (not onAppear) so the first
+            // animated frame already has the real page frame — the flight
+            // starts pixel-exact on the card, never from a stale fallback.
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
+                pageFrame = frame
+                if !started {
+                    started = true
+                    withAnimation(.snappy(duration: 0.35)) { appeared = true }
+                }
+            }
+            .onChange(of: isClosing) { _, closing in
+                guard closing else { return }
+                withAnimation(.snappy(duration: 0.3)) {
+                    appeared = false
+                } completion: {
+                    onCloseFinished()
+                }
+            }
+    }
+}
+
 struct ContentView: View {
     @Environment(SteamAuthService.self) private var steamAuth
     @Environment(SteamLibraryStore.self) private var library
@@ -34,6 +93,10 @@ struct ContentView: View {
     @State private var hasCheckedSetup = false
     @State private var showingDownloadsPopover = false
     @State private var showFriendsPanel = false
+    /// Zoom-transition anchor: the clicked card's frame, captured at push time.
+    @State private var zoomSourceFrame: CGRect?
+    /// True while the detail page is flying back into its card.
+    @State private var detailClosing = false
     /// Detail-column width measured while the panel is CLOSED (the frozen
     /// full-width layout the panel will cover).
     @State private var detailFullWidth: CGFloat = 0
@@ -157,8 +220,13 @@ struct ContentView: View {
                 detailColumnRoot
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .navigationDestination(item: $selectedGame) { game in
-                        GameDetailView(game: game) { selectedGame = nil }
+                        GameDetailView(game: game) { beginDetailClose() }
                             .id(game.id)
+                            .modifier(DetailZoom(
+                                sourceFrame: zoomSourceFrame,
+                                isClosing: detailClosing,
+                                onCloseFinished: finishDetailClose
+                            ))
                     }
                     .toolbar {
                         // Flexible space pushes everything after it to the
@@ -169,7 +237,7 @@ struct ContentView: View {
                                 launcher: launcher,
                                 library: library,
                                 isPresented: $showingDownloadsPopover,
-                                onSelectGame: { selectedGame = $0 }
+                                onSelectGame: { zoomSelectedGame.wrappedValue = $0 }
                             )
                         }
                         ToolbarItem(placement: .automatic) {
@@ -183,12 +251,12 @@ struct ContentView: View {
                                     showFriendsPanel.toggle()
                                 }
                             } label: {
-                                // Unstyled symbol — the toolbar applies the
-                                // same size/weight as the system items (e.g.
-                                // the sidebar toggle), so the icon weights
-                                // match across the strip. Plural glyph for
-                                // the friends list; outline, no fill.
+                                // Square label frame → macOS renders a perfect
+                                // circle regardless of the glyph's aspect ratio
+                                // (person.2 is wide; without this the pill
+                                // stretches). Plural glyph; outline, no fill.
                                 Image(systemName: "person.2")
+                                    .frame(width: 24, height: 24)
                             }
                             // No buttonStyle override — macOS supplies the
                             // toolbar circle / liquid glass, same as Downloads.
@@ -234,11 +302,11 @@ struct ContentView: View {
     private var detailColumnRoot: some View {
         switch sidebarDestination {
         case .home:
-            HomeView(selectedGame: $selectedGame)
+            HomeView(selectedGame: zoomSelectedGame)
         case .library:
-            LibraryView(selectedGame: $selectedGame)
+            LibraryView(selectedGame: zoomSelectedGame)
         case .search:
-            SearchView(selectedGame: $selectedGame)
+            SearchView(selectedGame: zoomSelectedGame)
         case .steamProfile:
             if !steamAuth.steamID.isEmpty {
                 SteamWebView(url: URL(string: "https://steamcommunity.com/profiles/\(steamAuth.steamID)")!)
@@ -248,13 +316,47 @@ struct ContentView: View {
         case .category(let id):
             let cat = categoryStore.category(id: id)
             LibraryView(
-                selectedGame: $selectedGame,
+                selectedGame: zoomSelectedGame,
                 categoryID: id,
                 categoryGames: categoryStore.games(in: id, from: library.games),
                 categoryTitle: cat?.name
             )
             .id(id)
         }
+    }
+
+    // MARK: - Detail zoom plumbing
+
+    /// Selection binding that anchors and owns the zoom: captures the clicked
+    /// card's frame from the registry, then pushes with the NavigationStack's
+    /// own animation suppressed — DetailZoom is the only motion on screen.
+    private var zoomSelectedGame: Binding<Game?> {
+        Binding(
+            get: { selectedGame },
+            set: { newValue in
+                if let game = newValue {
+                    zoomSourceFrame = CardFrameRegistry.shared.frame(for: game.id)
+                    detailClosing = false
+                    var t = Transaction()
+                    t.disablesAnimations = true
+                    withTransaction(t) { selectedGame = game }
+                } else {
+                    selectedGame = nil
+                }
+            }
+        )
+    }
+
+    private func beginDetailClose() {
+        guard !detailClosing else { return }
+        detailClosing = true
+    }
+
+    private func finishDetailClose() {
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) { selectedGame = nil }
+        detailClosing = false
     }
 }
 
