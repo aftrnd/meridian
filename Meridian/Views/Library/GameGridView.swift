@@ -3,6 +3,19 @@ import AppKit
 
 // MARK: - Game Card State
 
+/// Global-frame registry for game cards (appID → art frame in window coords).
+/// Plain singleton — deliberately NOT observable, so the per-scroll frame
+/// writes never invalidate any view. Read once at push time to anchor the
+/// card → detail zoom transition. Hover re-records, so when a game appears in
+/// two rows the instance under the cursor (the one being clicked) wins.
+@MainActor
+final class CardFrameRegistry {
+    static let shared = CardFrameRegistry()
+    private var frames: [Int: CGRect] = [:]
+    func record(id: Int, frame: CGRect) { frames[id] = frame }
+    func frame(for id: Int) -> CGRect? { frames[id] }
+}
+
 enum GameCardState: Equatable {
     case idle
     case notInstalled
@@ -25,6 +38,8 @@ struct GameGridView: View {
     @State private var runningPulse = false
     @State private var hoverLocation: CGPoint = .zero
     @State private var cardSize: CGSize = .zero
+    /// Art frame in window coordinates — the zoom transition's source rect.
+    @State private var cardFrame: CGRect = .zero
     /// Single resolved image shared across the card.
     /// Pre-populated from cache synchronously so the card never renders blank.
     @State private var loadedImage: NSImage?
@@ -234,6 +249,8 @@ struct GameGridView: View {
             case .active(let point):
                 hoverLocation = point
                 isHovered = true
+                // Hover = click candidate — make this instance the zoom anchor.
+                CardFrameRegistry.shared.record(id: game.id, frame: cardFrame)
             case .ended:
                 isHovered = false
                 hoverLocation = .zero
@@ -253,7 +270,11 @@ struct GameGridView: View {
             hoverLocation = CGPoint(x: cardSize.width / 2, y: cardSize.height / 2)
             isHovered = true
         }
-        .onGeometryChange(for: CGSize.self) { $0.size } action: { cardSize = $0 }
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
+            cardSize = frame.size
+            cardFrame = frame
+            CardFrameRegistry.shared.record(id: game.id, frame: frame)
+        }
     }
 
     // MARK: - Info Label (below art, TV app style)

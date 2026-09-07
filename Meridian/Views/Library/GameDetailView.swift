@@ -396,9 +396,12 @@ struct GameDetailView: View {
             .clipShape(RoundedRectangle(cornerRadius: GameDetailMetrics.cardCornerRadius, style: .continuous))
             // Behind the clipped hero so the blur bleeds past its edges
             // (added after clipShape → the glow itself is not clipped).
+            // The banner is the page's statement piece — wider spread than cards.
             .background {
                 ArtGlowBackground(colors: bannerGlowColors,
-                                  cornerRadius: GameDetailMetrics.cardCornerRadius)
+                                  cornerRadius: GameDetailMetrics.cardCornerRadius,
+                                  spread: 16,
+                                  blurRadius: 48)
             }
     }
 

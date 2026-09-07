@@ -161,27 +161,19 @@ final class FriendsPanelTests: XCTestCase {
                       "The width the panel math is based on must only be measured while the panel is closed.")
     }
 
-    /// FINAL title placement (July 12 2026, after two reversals): a large
-    /// bold title pinned INTO the nav strip via safeAreaInset +
-    /// ignoresSafeArea, its row exactly the unified-toolbar height so the
-    /// text centers on the circular button's centerline. NOT a ToolbarItem
-    /// (merges into a pill with the button); NOT inside the scroll content
-    /// (sat too low). clipShape on the panel root breaks the safe-area
-    /// hoist — never retry it.
-    func testFriendsPanel_titleCenteredInNavStrip() throws {
+    /// Apple-standard large title (Sept 7 2026, user direction): the panel
+    /// title lives IN the scroll content like Apple Music's Home/New/Radio
+    /// pages — large, bold, leading-aligned, scrolling with the content.
+    /// The earlier pinned nav-strip design (safeAreaInset + ignoresSafeArea,
+    /// July 12 2026) is retired — do not reintroduce it.
+    func testFriendsPanel_titleFollowsAppleLargeTitleStyle() throws {
         let source = try readSource("Meridian/Views/Friends/FriendsPanel.swift")
         XCTAssertTrue(source.contains(".font(.largeTitle.bold())"),
                       "Panel title keeps the major page-title weight.")
-        XCTAssertTrue(source.contains(".safeAreaInset(edge: .top"),
-                      "Title must be pinned into the nav strip via safeAreaInset.")
-        XCTAssertTrue(source.contains(".ignoresSafeArea(edges: .top)"),
-                      "The title row must be raised into the title-bar strip.")
-        XCTAssertTrue(source.contains("toolbarStripHeight"),
-                      "The title row must match the unified-toolbar height so the text centers on the button's centerline.")
-        XCTAssertFalse(source.contains("ToolbarItem"),
-                       "No toolbar items from the panel — text merges with the circular friends button into a pill.")
-        XCTAssertFalse(source.contains(".clipShape"),
-                       "Never clipShape the panel root — it breaks safe-area layout (regression July 12 2026).")
+        XCTAssertFalse(source.contains(".safeAreaInset(edge: .top"),
+                       "Title must scroll with the content (Apple Music style), not pin into the nav strip.")
+        XCTAssertFalse(source.contains(".ignoresSafeArea(edges: .top)"),
+                       "No safe-area hoist — that was the retired nav-strip title design.")
     }
 
     /// Friend sections are collapsible — the header row toggles its group

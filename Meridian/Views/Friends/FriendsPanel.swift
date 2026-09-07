@@ -84,6 +84,16 @@ struct FriendsPanel: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
+                // Apple-standard large title (Music/TV Home style, user
+                // direction Sept 7 2026): lives IN the scroll content,
+                // leading-aligned, scrolls away with it. The pinned
+                // nav-strip design was retired.
+                Text("Friends")
+                    .font(.largeTitle.bold())
+                    .padding(.leading, 16)
+                    .padding(.top, 8)
+                    .padding(.bottom, 14)
+
                 if library.friendSummaries.isEmpty {
                     emptyState
                 } else {
@@ -133,32 +143,7 @@ struct FriendsPanel: View {
             }
         }
         .scrollIndicators(.hidden)
-        // Title pinned INTO the title-bar strip (nav area), mathematically
-        // centered on the toolbar's centerline: the strip is the standard
-        // macOS unified-toolbar height (52 pt), and the row is exactly that
-        // tall with the text vertically centered — so the title's midline
-        // lands on the circular button's center (26 pt), not an eyeballed
-        // padding. Settled after two reversals (July 12 2026); final: the
-        // title lives in the nav area.
-        .safeAreaInset(edge: .top, spacing: 0) {
-            HStack {
-                Text("Friends")
-                    .font(.largeTitle.bold())
-                Spacer()
-            }
-            .padding(.leading, 16)
-            .frame(height: Self.toolbarStripHeight)
-        }
-        .ignoresSafeArea(edges: .top)
-        // NOTE: do NOT clipShape this view to round the panel's top-leading
-        // corner (tried July 12 2026 — broke the safe-area title hoist), and
-        // do NOT put the title in a ToolbarItem (macOS merges it with the
-        // circular friends button into a pill).
     }
-
-    /// Standard macOS unified title-bar + toolbar strip height. The pinned
-    /// title row matches it exactly so the text centers on the toolbar line.
-    private static let toolbarStripHeight: CGFloat = 52
 
     private var emptyState: some View {
         VStack(spacing: 8) {
