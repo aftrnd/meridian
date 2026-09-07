@@ -280,11 +280,7 @@ struct HomeView: View {
                             .frame(minWidth: 140, minHeight: 24)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 6)
-                            .background {
-                                Capsule()
-                                    .fill(.regularMaterial)
-                                    .overlay(Capsule().strokeBorder(.separator, lineWidth: 0.5))
-                            }
+                            .modifier(HeroGlassCapsule())
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(controlActiveState == .inactive ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
@@ -453,6 +449,25 @@ struct HomeView: View {
             library.hideGame(appID: game.id)
         } label: {
             Label("Hide Game", systemImage: "eye.slash")
+        }
+    }
+}
+
+// MARK: - Hero Glass Capsule
+
+/// Liquid Glass capsule on macOS 26 (interactive, tracks the system
+/// transparency/Reduce Transparency setting); frosted-material fallback
+/// on earlier systems.
+private struct HeroGlassCapsule: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            content.glassEffect(.regular.interactive(), in: .capsule)
+        } else {
+            content.background {
+                Capsule()
+                    .fill(.regularMaterial)
+                    .overlay(Capsule().strokeBorder(.separator, lineWidth: 0.5))
+            }
         }
     }
 }

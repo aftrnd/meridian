@@ -149,7 +149,9 @@ struct ContentView: View {
     private var mainContent: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView(selectedDestination: $sidebarDestination)
-                .navigationSplitViewColumnWidth(min: 220, ideal: 220, max: .infinity)
+                // Default AND minimum = 1/6 of the 1016 pt default window,
+                // rounded to the nearest 8 → 168.
+                .navigationSplitViewColumnWidth(min: 168, ideal: 168, max: .infinity)
         } detail: {
             NavigationStack {
                 detailColumnRoot
@@ -268,6 +270,35 @@ extension Notification.Name {
 
 // MARK: - Sidebar
 
+/// Brand lavender sampled from the app icon (display-p3 0.788, 0.607, 1.0).
+extension Color {
+    static let meridianAccent = Color(.displayP3, red: 0.78809, green: 0.60742, blue: 1.0)
+}
+
+/// Sidebar icon tint: monochrome (white in dark mode) at rest, brand purple
+/// when the row is selected. `.fixed` so the selection highlight can't
+/// override it back to the system accent.
+private func sidebarTint(selected: Bool) -> ListItemTint {
+    .fixed(selected ? .meridianAccent : .primary)
+}
+
+/// Shrinks only the glyph to a clean fraction of the row's text size
+/// (13 pt body → ~10 pt icon at the 0.75 ratio) while keeping the standard
+/// Label icon-column layout, so titles stay aligned.
+private struct SidebarLabelStyle: LabelStyle {
+    static let iconRatio: CGFloat = 0.75
+    private static let iconSize = (NSFont.preferredFont(forTextStyle: .body).pointSize * iconRatio).rounded()
+
+    func makeBody(configuration: Configuration) -> some View {
+        Label {
+            configuration.title
+        } icon: {
+            configuration.icon
+                .font(.system(size: Self.iconSize))
+        }
+    }
+}
+
 private struct SidebarView: View {
     @Binding var selectedDestination: SidebarDestination
     @Environment(SteamAuthService.self) private var steamAuth
@@ -277,14 +308,17 @@ private struct SidebarView: View {
         List(selection: $selectedDestination) {
             Label("Search", systemImage: "magnifyingglass")
                 .tag(SidebarDestination.search)
+                .listItemTint(sidebarTint(selected: selectedDestination == .search))
 
             Label("Home", systemImage: "house")
                 .tag(SidebarDestination.home)
+                .listItemTint(sidebarTint(selected: selectedDestination == .home))
 
             Section("Library") {
                 ForEach(SteamLibraryStore.LibraryFilter.allCases) { filter in
                     Label(filter.rawValue, systemImage: filterIcon(filter))
                         .tag(SidebarDestination.library(filter))
+                        .listItemTint(sidebarTint(selected: selectedDestination == .library(filter)))
                 }
             }
 
@@ -296,10 +330,13 @@ private struct SidebarView: View {
             Section("Steam") {
                 Label("Store", systemImage: "cart")
                     .tag(SidebarDestination.steamStore)
+                    .listItemTint(sidebarTint(selected: selectedDestination == .steamStore))
                 Label("Profile", systemImage: "person.crop.circle")
                     .tag(SidebarDestination.steamProfile)
+                    .listItemTint(sidebarTint(selected: selectedDestination == .steamProfile))
             }
         }
+        .labelStyle(SidebarLabelStyle())
         .listStyle(.sidebar)
         .navigationTitle("Meridian")
     }
@@ -380,6 +417,7 @@ private struct CategoriesSidebarSection: View {
             }
         }
         .tag(SidebarDestination.category(cat.id))
+        .listItemTint(sidebarTint(selected: selectedDestination == .category(cat.id)))
         .contextMenu { categoryContextMenu(cat) }
     }
 
@@ -409,6 +447,7 @@ private struct CategoriesSidebarSection: View {
             }
             .contextMenu { folderContextMenu(folder) }
         }
+        .listItemTint(sidebarTint(selected: false))
     }
 
     // MARK: Context menus

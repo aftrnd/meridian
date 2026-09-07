@@ -7,7 +7,8 @@ private let log = MeridianLog(category: "AppDelegate")
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
 
     private static let splashSize     = NSSize(width: 480, height: 300)
-    private static let fullFrameSize  = NSSize(width: 1030, height: 625)
+    // 1016×616: clean multiples of 8 that keep the original 1030×625 aspect ratio (≈1.649).
+    private static let fullFrameSize  = NSSize(width: 1016, height: 616)
 
     private var readyObserver: NSObjectProtocol?
 
@@ -35,7 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // Call synchronously — no async hop. The window exists by the time
         // applicationDidFinishLaunching fires. An async dispatch gives macOS
         // window restoration one runloop cycle to restore the previous full-size
-        // frame (1030×625) before we can override it, causing the wrong size to
+        // frame (1016×616) before we can override it, causing the wrong size to
         // flash on screen. Synchronous call wins the race.
         enforceMainWindowLaunchFrame()
 
@@ -56,7 +57,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
 
         // Prevent macOS window restoration from applying the previous session's
-        // frame (full-size 1030×625). Must be set before setContentSize so the
+        // frame (full-size 1016×616). Must be set before setContentSize so the
         // restore system never overrides what we're about to write.
         window.isRestorable = false
         window.setFrameAutosaveName("")
