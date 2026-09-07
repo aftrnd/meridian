@@ -403,7 +403,7 @@ struct GameDetailView: View {
         let urls = currentGame.newCDNHeroURLs + [currentGame.heroURL] + currentGame.heroURLFallbacks
 
         for url in urls {
-            if let cached = ImageCache.shared.image(for: url) {
+            if let cached = await ImageCache.shared.imageAsync(for: url) {
                 let r = cached.size.width / cached.size.height
                 if r > 0.05, r < 20 { heroAspectRatio = r }
                 bannerImage = cached
@@ -416,7 +416,7 @@ struct GameDetailView: View {
             do {
                 let (data, response) = try await URLSession.imageSession.data(from: url)
                 if let http = response as? HTTPURLResponse, http.statusCode != 200 { continue }
-                guard let img = NSImage(data: data) else { continue }
+                guard let img = await ImageCache.decode(data) else { continue }
                 ImageCache.shared.store(img, for: url, rawData: data)
                 let r = img.size.width / img.size.height
                 if r > 0.05, r < 20 { heroAspectRatio = r }

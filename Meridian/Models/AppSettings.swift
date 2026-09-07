@@ -150,14 +150,30 @@ final class AppSettings: @unchecked Sendable {
 
     // MARK: - Launch History
 
+    /// In-memory mirrors of the hot collections below. Sorting the Home rows
+    /// hits lastLaunchDate/isFavorite thousands of times per frame during live
+    /// resize; decoding these from UserDefaults on every call made the Home
+    /// tab unresponsive. Lock-guarded because AppSettings is @unchecked Sendable.
+    @ObservationIgnored private let cacheLock = NSLock()
+    @ObservationIgnored private var _launchTimestamps: [Int: TimeInterval]?
+    @ObservationIgnored private var _favoriteAppIDs: Set<Int>?
+
     private var launchTimestamps: [Int: TimeInterval] {
         get {
+            cacheLock.lock()
+            defer { cacheLock.unlock() }
+            if let cached = _launchTimestamps { return cached }
             let raw = UserDefaults.standard.dictionary(forKey: "launchTimestamps") as? [String: Double] ?? [:]
-            return raw.reduce(into: [Int: TimeInterval]()) { result, pair in
+            let decoded = raw.reduce(into: [Int: TimeInterval]()) { result, pair in
                 if let key = Int(pair.key) { result[key] = pair.value }
             }
+            _launchTimestamps = decoded
+            return decoded
         }
         set {
+            cacheLock.lock()
+            _launchTimestamps = newValue
+            cacheLock.unlock()
             let stringKeyed = newValue.reduce(into: [String: Double]()) { $0[String($1.key)] = $1.value }
             UserDefaults.standard.set(stringKeyed, forKey: "launchTimestamps")
         }
@@ -305,8 +321,20 @@ final class AppSettings: @unchecked Sendable {
     // MARK: - Favorites
 
     var favoriteAppIDs: Set<Int> {
-        get { Set(UserDefaults.standard.array(forKey: "favoriteAppIDs") as? [Int] ?? []) }
-        set { UserDefaults.standard.set(Array(newValue), forKey: "favoriteAppIDs") }
+        get {
+            cacheLock.lock()
+            defer { cacheLock.unlock() }
+            if let cached = _favoriteAppIDs { return cached }
+            let decoded = Set(UserDefaults.standard.array(forKey: "favoriteAppIDs") as? [Int] ?? [])
+            _favoriteAppIDs = decoded
+            return decoded
+        }
+        set {
+            cacheLock.lock()
+            _favoriteAppIDs = newValue
+            cacheLock.unlock()
+            UserDefaults.standard.set(Array(newValue), forKey: "favoriteAppIDs")
+        }
     }
 
     func isFavorite(appID: Int) -> Bool {
@@ -330,6 +358,9 @@ final class AppSettings: @unchecked Sendable {
         hiddenAppIDs    = []
         favoriteAppIDs  = []
         UserDefaults.standard.removeObject(forKey: "launchTimestamps")
+        cacheLock.lock()
+        _launchTimestamps = nil
+        cacheLock.unlock()
         UserDefaults.standard.removeObject(forKey: "isSteamLoggedIn")
         steamCredentialSteamID = ""
         steamCredentialAccountName = ""
