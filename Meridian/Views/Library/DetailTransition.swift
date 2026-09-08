@@ -131,12 +131,8 @@ struct DetailZoom {
 
     /// Library recede. The root never transforms (a scale forces every glow
     /// blur and the hero's backgroundExtensionEffect to re-render per frame
-    /// under a changing transform — visibly jerky). It darkens from the first
-    /// frame as the page comes forward, then dissolves once the rect is
-    /// about to cover it.
-    @MainActor static func rootDim(at p: CGFloat) -> Double {
-        tuning.rootDimMax * smoothstep(unit(p), from: 0, to: tuning.rootDimEnd)
-    }
+    /// under a changing transform — visibly jerky). It stays untouched as the
+    /// page comes forward, then dissolves once the rect is about to cover it.
     @MainActor static func rootOpacity(at p: CGFloat) -> Double {
         1 - smoothstep(unit(p), from: tuning.rootFadeStart, to: tuning.rootFadeEnd)
     }
@@ -177,10 +173,10 @@ extension EnvironmentValues {
 
 // MARK: Root recede
 
-/// Library layer: dims, then dissolves, as the page comes forward. Pure
-/// compositing (one overlay alpha + one group alpha) — no transform, so
-/// nothing in the root re-renders. Always applied (identity at progress 0)
-/// so the root keeps its identity/state.
+/// Library layer: dissolves as the page comes forward. Pure compositing
+/// (one group alpha) — no transform, so nothing in the root re-renders.
+/// Always applied (identity at progress 0) so the root keeps its
+/// identity/state.
 struct DetailStageRecede: ViewModifier, Animatable {
     var progress: CGFloat
 
@@ -192,15 +188,6 @@ struct DetailStageRecede: ViewModifier, Animatable {
 
     func body(content: Content) -> some View {
         content
-            // Inside the group alpha so the dim leaves with the root. Extends
-            // under the toolbar so the strip the glass samples darkens in
-            // step with the stage instead of lagging it.
-            .overlay {
-                Color.black
-                    .opacity(DetailZoom.rootDim(at: progress))
-                    .ignoresSafeArea()
-                    .allowsHitTesting(false)
-            }
             .opacity(DetailZoom.rootOpacity(at: progress))
     }
 }

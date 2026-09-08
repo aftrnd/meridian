@@ -10,16 +10,16 @@ import AppKit
 struct DetailZoomParameters: Codable, Equatable, Sendable {
     // Open. Curve mode = cubic Bézier (ease-in → ease-out, no bounce);
     // spring mode uses duration/bounce/kick.
-    var openUsesCurve: Bool   = false
-    var openEaseIn: Double    = 0.45
-    var openEaseOut: Double   = 0.85
-    var openDuration: Double  = 0.3
+    var openUsesCurve: Bool   = true
+    var openEaseIn: Double    = 0.8
+    var openEaseOut: Double   = 0.35
+    var openDuration: Double  = 0.225
     var openBounce: Double    = 0.189
     var openKick: Double      = 5
 
     // Close spring
     var closeDuration: Double = 0.65
-    var closeBounce: Double   = 0.147
+    var closeBounce: Double   = 0.15
     var closeKick: Double     = 12
 
     // Ghost (card art) → page dissolve
@@ -28,15 +28,13 @@ struct DetailZoomParameters: Codable, Equatable, Sendable {
 
     // Clip
     var cornerRadius: Double       = 12
-    var cornerHoldUntil: Double    = 0.4
-    var clipOverreachStart: Double = 0.82
-    var clipRestInset: Double      = 256
+    var cornerHoldUntil: Double    = 0.3
+    var clipOverreachStart: Double = 0.23
+    var clipRestInset: Double      = 200
 
     // Library recede
-    var rootDimMax: Double    = 0.4
-    var rootDimEnd: Double    = 0.5
-    var rootFadeStart: Double = 0.55
-    var rootFadeEnd: Double   = 0.9
+    var rootFadeStart: Double = 0.656
+    var rootFadeEnd: Double   = 1
 
     // Card geometry
     var hoverLift: Double = 0.015
@@ -47,8 +45,8 @@ struct DetailZoomParameters: Codable, Equatable, Sendable {
 
     // Hand-offs
     var ambientFade: Double = 0.4
-    var chromeSwap: Double  = 0.22
-    var landingFade: Double = 0.15
+    var chromeSwap: Double  = 0.611
+    var landingFade: Double = 0.6
 
     /// Swift literal of the current values, for pasting back as new defaults.
     var swiftLiteral: String {
@@ -135,8 +133,6 @@ struct DetailZoomTuningWindow: View {
                 row("Rest inset (pt)",       \.clipRestInset,      0...600)
             }
             Section("Library recede (progress)") {
-                row("Dim max",               \.rootDimMax,    0...1)
-                row("Dim reaches max at",    \.rootDimEnd,    0...1)
                 row("Fade start",            \.rootFadeStart, 0...1)
                 row("Fade end",              \.rootFadeEnd,   0...1)
             }
