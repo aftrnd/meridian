@@ -30,6 +30,15 @@ Prime directive: **performance fixes must never change what the user sees.** Sam
 - All artwork goes through `ImageCache` (two-tier: NSCache + disk). Always pass `rawData` to `store()` so the disk tier never re-encodes.
 - Downsample large art (hero/banner) to display size before caching in memory when feasible — but never change perceived visual quality.
 
+## Transitions & transforms
+
+- Never animate `scaleEffect`/`rotation` on a large live subtree that contains blur filters or `backgroundExtensionEffect` — they re-render every frame under a changing transform. Recede with a dim overlay + group alpha instead.
+- Blur-based effects inside a scaled layer shimmer; don't render them mid-flight, fade them in after the animation settles.
+- AppKit-backed views (`ProgressView`, representables) inside a scaled layer trip SwiftUI's platform-view length assertion. Mount them after landing inside a placeholder of their measured size.
+- Drive per-frame motion with `Animatable` modifiers reading ONE animated value; never let the animated value feed a heavy view's `body`. Keep state churn away from the flight's first frame (`.equatable()` wrappers).
+- `GeometryProxy.frame(in:)` includes ancestor GeometryEffects (verified) — record layout frames only when no hover/scale transform is active.
+- Any `if` around `content` inside a `ViewModifier` body resets the child's `@State`; use always-applied modifiers with neutral rest values (an oversized `clipShape` preserves overflow).
+
 ## Timers
 
 - Justify every `Timer`/sleep-loop interval in a comment. Current known intervals: install-state poll (SteamLibraryStore), window-suppression poll (SteamWindow, guard tested in WindowClassificationTests), home carousel (HomeView).

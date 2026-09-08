@@ -3,19 +3,6 @@ import AppKit
 
 // MARK: - Game Card State
 
-/// Global-frame registry for game cards (appID → art frame in window coords).
-/// Plain singleton — deliberately NOT observable, so the per-scroll frame
-/// writes never invalidate any view. Read once at push time to anchor the
-/// card → detail zoom transition. Hover re-records, so when a game appears in
-/// two rows the instance under the cursor (the one being clicked) wins.
-@MainActor
-final class CardFrameRegistry {
-    static let shared = CardFrameRegistry()
-    private var frames: [Int: CGRect] = [:]
-    func record(id: Int, frame: CGRect) { frames[id] = frame }
-    func frame(for id: Int) -> CGRect? { frames[id] }
-}
-
 enum GameCardState: Equatable {
     case idle
     case notInstalled
@@ -38,8 +25,8 @@ struct GameGridView: View {
     @State private var runningPulse = false
     @State private var hoverLocation: CGPoint = .zero
     @State private var cardSize: CGSize = .zero
-    /// Art frame in window coordinates — the zoom transition's source rect.
-    @State private var cardFrame: CGRect = .zero
+    /// Art frame in the detail stage's coordinate space — the zoom's card rect.
+    @State private var artFrame: CGRect = .zero
     /// Single resolved image shared across the card.
     /// Pre-populated from cache synchronously so the card never renders blank.
     @State private var loadedImage: NSImage?
@@ -47,6 +34,14 @@ struct GameGridView: View {
     /// Corner colors sampled from the art — drives the ambient glow bleed.
     @State private var glowColors: ImageCache.EdgeColors?
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.detailFlightSource) private var flightSource
+
+    /// True while the detail-open ghost is departing from THIS card instance
+    /// (matched by frame, so a duplicate in another row stays visible).
+    private var isFlightSource: Bool {
+        guard let s = flightSource, s.gameID == game.id else { return false }
+        return abs(s.artFrame.midX - artFrame.midX) < 2 && abs(s.artFrame.midY - artFrame.midY) < 2
+    }
 
     private var isRunning: Bool { gameState == .running }
     private var isLaunching: Bool { gameState == .launching || gameState == .stopping }
@@ -113,6 +108,9 @@ struct GameGridView: View {
         .onDisappear {
             isHovered = false
             hoverLocation = .zero
+            // Otherwise a scrolled-away card's stale frame could anchor a zoom
+            // to a spot now occupied by a different card.
+            DetailTransitionRegistry.shared.forgetCard(id: game.id, artFrame: artFrame)
         }
         .onAppear { updatePulse() }
         .onChange(of: gameState) { _, _ in updatePulse() }
@@ -237,6 +235,11 @@ struct GameGridView: View {
                 .strokeBorder(cardBorderColor, lineWidth: cardBorderWidth)
         }
         .clipShape(RoundedRectangle(cornerRadius: 12))
+        // The ghost stands in for the art while it lifts off (iOS hides the
+        // source cell the same way); no-op at 1 so idle cards pay nothing.
+        // Applied BEFORE the glow so the glow stays put under the departing
+        // art instead of blinking out on click.
+        .opacity(isFlightSource ? 0 : 1)
         // Behind the clipped card so the blur bleeds past its edges onto the
         // background (added after clipShape → the glow itself is not clipped).
         .background { ArtGlowBackground(colors: glowColors) }
@@ -249,11 +252,12 @@ struct GameGridView: View {
             case .active(let point):
                 hoverLocation = point
                 isHovered = true
-                // Hover = click candidate — make this instance the zoom anchor.
-                CardFrameRegistry.shared.record(id: game.id, frame: cardFrame)
+                // Hover = click candidate — make this instance the flight anchor.
+                registerCard(hovered: true)
             case .ended:
                 isHovered = false
                 hoverLocation = .zero
+                registerCard(hovered: false)
             }
         }
         // Recovery for the post-scroll "stuck at false" case: when proxy.scrollTo
@@ -269,12 +273,31 @@ struct GameGridView: View {
             // .active will correct it to the actual cursor location on first move.
             hoverLocation = CGPoint(x: cardSize.width / 2, y: cardSize.height / 2)
             isHovered = true
+            registerCard(hovered: true)
         }
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(DetailTransitionRegistry.stageSpace)) } action: { frame in
+            // frame(in:) includes the card's own hover lift/tilt (verified), so
+            // only take layout-scale readings; the registry adds the lift itself.
+            guard !isHovered else { return }
             cardSize = frame.size
-            cardFrame = frame
-            CardFrameRegistry.shared.record(id: game.id, frame: frame)
+            artFrame = frame
+            registerCard(hovered: false)
         }
+        // The ghost must be exactly what the card draws.
+        .onChange(of: loadedImage) { _, _ in registerCard(hovered: isHovered) }
+        // The art is lifting off (or landing): drop the hover state now. Hit
+        // testing is off for the flight so `.ended` would never arrive, and a
+        // stuck hover would re-appear tilted + highlighted when the art returns.
+        .onChange(of: isFlightSource) { _, active in
+            guard active, isHovered else { return }
+            isHovered = false
+            hoverLocation = .zero
+            registerCard(hovered: false)
+        }
+    }
+
+    private func registerCard(hovered: Bool) {
+        DetailTransitionRegistry.shared.recordCard(id: game.id, artFrame: artFrame, isHovered: hovered, image: loadedImage)
     }
 
     // MARK: - Info Label (below art, TV app style)

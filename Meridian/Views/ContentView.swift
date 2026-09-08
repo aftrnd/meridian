@@ -12,65 +12,6 @@ enum SidebarDestination: Hashable {
     case category(UUID)
 }
 
-// MARK: - Detail Zoom Transition
-
-/// iPhone app-open feel, built from scratch (`NavigationTransition.zoom` is
-/// unavailable on macOS): the detail page grows out of the clicked card's
-/// exact art frame — uniform scale anchored at the card's center, with a
-/// rounded-corner mask and fade that resolve as it lands. Close plays the
-/// full reverse back into the card. Pure GPU compositing (scale/opacity/
-/// mask — zero layout), driven by springs, so it renders full-rate on both
-/// 60 Hz and ProMotion displays. The NavigationStack's own push/pop
-/// animation is suppressed via `Transaction`; this owns the motion.
-private struct DetailZoom: ViewModifier {
-    /// Clicked card's art frame in window coords (nil → center fallback).
-    let sourceFrame: CGRect?
-    /// Flipped by the close button; drives the reverse flight.
-    let isClosing: Bool
-    /// Called when the reverse flight lands — performs the actual pop.
-    let onCloseFinished: () -> Void
-
-    @State private var appeared = false
-    @State private var started = false
-    @State private var pageFrame: CGRect = .zero
-
-    private var collapsedScale: CGFloat {
-        guard let s = sourceFrame, pageFrame.width > 1 else { return 0.92 }
-        return max(0.04, s.width / pageFrame.width)
-    }
-
-    private var anchor: UnitPoint {
-        guard let s = sourceFrame, pageFrame.width > 1, pageFrame.height > 1 else { return .center }
-        return UnitPoint(x: (s.midX - pageFrame.minX) / pageFrame.width,
-                         y: (s.midY - pageFrame.minY) / pageFrame.height)
-    }
-
-    func body(content: Content) -> some View {
-        content
-            .clipShape(.rect(cornerRadius: appeared ? 0 : 12))
-            .scaleEffect(appeared ? 1 : collapsedScale, anchor: anchor)
-            .opacity(appeared ? 1 : 0)
-            // Kick off from the geometry callback (not onAppear) so the first
-            // animated frame already has the real page frame — the flight
-            // starts pixel-exact on the card, never from a stale fallback.
-            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
-                pageFrame = frame
-                if !started {
-                    started = true
-                    withAnimation(.snappy(duration: 0.35)) { appeared = true }
-                }
-            }
-            .onChange(of: isClosing) { _, closing in
-                guard closing else { return }
-                withAnimation(.snappy(duration: 0.3)) {
-                    appeared = false
-                } completion: {
-                    onCloseFinished()
-                }
-            }
-    }
-}
-
 struct ContentView: View {
     @Environment(SteamAuthService.self) private var steamAuth
     @Environment(SteamLibraryStore.self) private var library
@@ -93,13 +34,33 @@ struct ContentView: View {
     @State private var hasCheckedSetup = false
     @State private var showingDownloadsPopover = false
     @State private var showFriendsPanel = false
-    /// Zoom-transition anchor: the clicked card's frame, captured at push time.
-    @State private var zoomSourceFrame: CGRect?
-    /// True while the detail page is flying back into its card.
-    @State private var detailClosing = false
     /// Detail-column width measured while the panel is CLOSED (the frozen
     /// full-width layout the panel will cover).
     @State private var detailFullWidth: CGFloat = 0
+
+    // Card ↔ detail zoom (see DetailTransition.swift).
+    /// The zoom currently in flight, if any (nil once settled either way).
+    @State private var zoom: DetailZoom?
+    /// 0 = library at rest, 1 = detail page at rest. The ONE animated value;
+    /// root recede, page reveal and ghost all derive from it.
+    @State private var zoomProgress: CGFloat = 0
+    /// Set by `openDetail`, consumed by the page's `onAppear`: the flight
+    /// starts only once the page has committed at progress 0, so its
+    /// Animatable modifier has a frame to interpolate from (and the page's
+    /// mount cost lands before the motion, never inside it).
+    @State private var pendingOpen = false
+    /// Which page owns the toolbar + title. Flips at the START of each zoom
+    /// (true on open, false on close) so the chrome hands over the instant
+    /// the motion begins, as on iOS — not when the page finally unmounts.
+    @State private var detailChrome = false
+    /// Close landing: the card already shows its own art while the ghost
+    /// fades off it (the source-hide is lifted, ghost alpha → 0).
+    @State private var landing = false
+    @State private var ghostOpacity: Double = 1
+    /// Stage (detail column content area) size — the zoom's large end.
+    @State private var stageSize: CGSize = .zero
+    /// Bumped per flight so a stale completion/watchdog can't touch a newer one.
+    @State private var zoomGeneration = 0
 
     /// Friends panel width, derived from the frozen Home layout: the panel's
     /// leading edge lands exactly at the row's natural "3 full cards + the
@@ -217,50 +178,47 @@ struct ContentView: View {
                 .navigationSplitViewColumnWidth(min: 168, ideal: 168, max: .infinity)
         } detail: {
             NavigationStack {
-                detailColumnRoot
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .navigationDestination(item: $selectedGame) { game in
-                        GameDetailView(game: game) { beginDetailClose() }
-                            .id(game.id)
-                            .modifier(DetailZoom(
-                                sourceFrame: zoomSourceFrame,
-                                isClosing: detailClosing,
-                                onCloseFinished: finishDetailClose
-                            ))
-                    }
+                stage
+                    .navigationTitle(stageTitle)
+                    .environment(\.detailFlightSource, landing ? nil : zoom?.source)
+                    .environment(\.detailPresented, detailChrome)
                     .toolbar {
-                        // Flexible space pushes everything after it to the
-                        // trailing end — same pattern as GameDetailView.
-                        ToolbarItem(placement: .automatic) { Spacer() }
-                        ToolbarItem(placement: .automatic) {
-                            DownloadsToolbarButton(
-                                launcher: launcher,
-                                library: library,
-                                isPresented: $showingDownloadsPopover,
-                                onSelectGame: { zoomSelectedGame.wrappedValue = $0 }
-                            )
-                        }
-                        ToolbarItem(placement: .automatic) {
-                            Button {
-                                // One transaction for the inspector slide AND
-                                // the friendsPanelOpen-driven row re-layout —
-                                // without this the cards snap to their new
-                                // metrics instantly while the panel is still
-                                // sliding, which reads as jank.
-                                withAnimation(.snappy(duration: 0.28)) {
-                                    showFriendsPanel.toggle()
-                                }
-                            } label: {
-                                // Square label frame → macOS renders a perfect
-                                // circle regardless of the glyph's aspect ratio
-                                // (person.2 is wide; without this the pill
-                                // stretches). Plural glyph; outline, no fill.
-                                Image(systemName: "person.2")
-                                    .frame(width: 24, height: 24)
+                        // Root-page chrome only; the detail page brings its own
+                        // (back, favourite, more) via its own `.toolbar`.
+                        if !detailChrome {
+                            // Flexible space pushes everything after it to the
+                            // trailing end — same pattern as GameDetailView.
+                            ToolbarItem(placement: .automatic) { Spacer() }
+                            ToolbarItem(placement: .automatic) {
+                                DownloadsToolbarButton(
+                                    launcher: launcher,
+                                    library: library,
+                                    isPresented: $showingDownloadsPopover,
+                                    onSelectGame: { openDetail($0) }
+                                )
                             }
-                            // No buttonStyle override — macOS supplies the
-                            // toolbar circle / liquid glass, same as Downloads.
-                            .help(showFriendsPanel ? "Hide Friends" : "Show Friends")
+                            ToolbarItem(placement: .automatic) {
+                                Button {
+                                    // One transaction for the inspector slide AND
+                                    // the friendsPanelOpen-driven row re-layout —
+                                    // without this the cards snap to their new
+                                    // metrics instantly while the panel is still
+                                    // sliding, which reads as jank.
+                                    withAnimation(.snappy(duration: 0.28)) {
+                                        showFriendsPanel.toggle()
+                                    }
+                                } label: {
+                                    // Square label frame → macOS renders a perfect
+                                    // circle regardless of the glyph's aspect ratio
+                                    // (person.2 is wide; without this the pill
+                                    // stretches). Plural glyph; outline, no fill.
+                                    Image(systemName: "person.2")
+                                        .frame(width: 24, height: 24)
+                                }
+                                // No buttonStyle override — macOS supplies the
+                                // toolbar circle / liquid glass, same as Downloads.
+                                .help(showFriendsPanel ? "Hide Friends" : "Show Friends")
+                            }
                         }
                     }
                     // Discord-style trailing friends panel. Standard macOS
@@ -293,30 +251,112 @@ struct ContentView: View {
                 library.filter = filter
             }
             // Dismiss game detail when changing sections — matches standard master–detail behaviour.
-            selectedGame = nil
+            resetDetailTransition()
         }
     }
 
-    /// Root of the split-view detail column; game details push on top via `navigationDestination`.
-    @ViewBuilder
-    private var detailColumnRoot: some View {
+    /// The detail column's content: the root page (always mounted, so its
+    /// state survives a detail visit) with the game page zooming in over it.
+    /// Layer order bottom → top: root (recedes) · page (revealed inside the
+    /// zoom rect) · ghost (card art dissolving into the page).
+    private var stage: some View {
+        ZStack(alignment: .topLeading) {
+            StageRoot(destination: sidebarDestination, steamID: steamAuth.steamID) { game in
+                if let game { openDetail(game) } else { closeDetail() }
+            }
+            .equatable()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // Inside the recede transform, so card frames stay in resting
+                // layout coordinates while the root is scaled.
+                .coordinateSpace(name: DetailTransitionRegistry.stageSpace)
+                .modifier(DetailStageRecede(progress: zoomProgress))
+                // Only once the root is fully faded — toggling it at flight
+                // start snapped Home's under-toolbar backdrop off in a frame.
+                .modifier(DetailStageEdgeEffectSuppression(suppressed: selectedGame != nil && zoom == nil))
+                // Interactive the moment a close STARTS (target 0), not when it
+                // settles — the next click never waits on a spring's tail.
+                .allowsHitTesting(zoomProgress == 0)
+                .accessibilityHidden(selectedGame != nil)
+
+            if let game = selectedGame {
+                GameDetailView(game: game, onDismiss: { closeDetail() },
+                               showsToolbar: detailChrome, showsAmbient: zoom == nil)
+                    // Next run-loop pass, so the page's (heavy) first frame is
+                    // committed before the clock starts — the mount cost
+                    // becomes ~1 frame of click latency, never a hitch.
+                    // INSIDE `.id`: when one game replaces another in a single
+                    // update (open during a close) the `if let` branch persists
+                    // and an outer onAppear would never fire — the open would
+                    // sit at progress 0 until the watchdog forced it.
+                    .onAppear { DispatchQueue.main.async { beginPendingOpen() } }
+                    .id(game.id)
+                    // Outside `.id` so its animated progress carries across a
+                    // game swap instead of restarting.
+                    .modifier(DetailZoomReveal(progress: zoomProgress, zoom: zoom, stageSize: stageSize))
+                    // Likewise usable as soon as the open starts (target 1).
+                    .allowsHitTesting(zoomProgress == 1)
+            }
+
+            DetailZoomGhost(zoom: zoom, progress: zoomProgress, stageSize: stageSize, opacity: ghostOpacity)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { stageSize = $0 }
+    }
+
+    /// One title owner for the whole stage. Root and detail are mounted
+    /// together mid-flight (and the root stays mounted, hidden, while a game
+    /// is open), so per-page `.navigationTitle`s would race — none of the
+    /// pages set their own.
+    private var stageTitle: String {
+        if detailChrome, let game = selectedGame { return game.name }
         switch sidebarDestination {
+        case .search:            return "Search"
+        case .category(let id):  return categoryStore.category(id: id)?.name ?? ""
+        default:                 return ""
+        }
+    }
+}
+
+/// Root of the detail column stage. Equatable on its plain inputs so the
+/// stage's own state churn at flight boundaries (zoom, selection, chrome)
+/// never re-evaluates Home/Library bodies on the flight's first frame —
+/// their own observed stores still update them as usual.
+private struct StageRoot: View, Equatable {
+    let destination: SidebarDestination
+    let steamID: String
+    /// nil = close. Never compared; the binding handed to pages reads nil (see
+    /// the selection notes on ContentView).
+    let select: (Game?) -> Void
+
+    @Environment(SteamLibraryStore.self) private var library
+    @Environment(CategoryStore.self) private var categoryStore
+
+    nonisolated static func == (a: StageRoot, b: StageRoot) -> Bool {
+        a.destination == b.destination && a.steamID == b.steamID
+    }
+
+    private var presentedGame: Binding<Game?> {
+        Binding(get: { nil }, set: { select($0) })
+    }
+
+    var body: some View {
+        switch destination {
         case .home:
-            HomeView(selectedGame: zoomSelectedGame)
+            HomeView(selectedGame: presentedGame)
         case .library:
-            LibraryView(selectedGame: zoomSelectedGame)
+            LibraryView(selectedGame: presentedGame)
         case .search:
-            SearchView(selectedGame: zoomSelectedGame)
+            SearchView(selectedGame: presentedGame)
         case .steamProfile:
-            if !steamAuth.steamID.isEmpty {
-                SteamWebView(url: URL(string: "https://steamcommunity.com/profiles/\(steamAuth.steamID)")!)
+            if !steamID.isEmpty {
+                SteamWebView(url: URL(string: "https://steamcommunity.com/profiles/\(steamID)")!)
             }
         case .steamStore:
             SteamWebView(url: URL(string: "https://store.steampowered.com")!)
         case .category(let id):
             let cat = categoryStore.category(id: id)
             LibraryView(
-                selectedGame: zoomSelectedGame,
+                selectedGame: presentedGame,
                 categoryID: id,
                 categoryGames: categoryStore.games(in: id, from: library.games),
                 categoryTitle: cat?.name
@@ -324,39 +364,207 @@ struct ContentView: View {
             .id(id)
         }
     }
+}
 
-    // MARK: - Detail zoom plumbing
+extension ContentView {
 
-    /// Selection binding that anchors and owns the zoom: captures the clicked
-    /// card's frame from the registry, then pushes with the NavigationStack's
-    /// own animation suppressed — DetailZoom is the only motion on screen.
-    private var zoomSelectedGame: Binding<Game?> {
-        Binding(
-            get: { selectedGame },
-            set: { newValue in
-                if let game = newValue {
-                    zoomSourceFrame = CardFrameRegistry.shared.frame(for: game.id)
-                    detailClosing = false
-                    var t = Transaction()
-                    t.disablesAnimations = true
-                    withTransaction(t) { selectedGame = game }
-                } else {
-                    selectedGame = nil
-                }
+    // MARK: - Card ↔ detail zoom
+    //
+    // Every entry point (card click, hero button, downloads popover, Esc,
+    // Back) routes through openDetail/closeDetail so all get the same motion.
+    // The selection binding handed to root pages always reads nil: the root
+    // is only ever visible with no game selected or mid-flight, when a
+    // selection chevron under the departing/returning art would be wrong.
+
+    // Timings — tuned as physics, not curves (live values: Zoom Tuning window,
+    // ⌥⌘Z; defaults in DetailZoomParameters). A real spring released from rest
+    // starts with zero velocity (a soft ramp that reads as stiff), so both
+    // get an initial kick (in whole-distances/s) as if flung: the rect is
+    // already moving on the first frame. Bounce and speed are matched — a
+    // livelier wobble needs a faster approach or the landing looks fake. The
+    // page breathes past 1:1 on open; on close the art squishes into the card
+    // and springs back. Completions use `.removed` so the modifiers are only
+    // dropped once the spring has truly settled. Both retarget mid-flight
+    // with velocity preserved.
+    private var openZoom: Animation {
+        let t = DetailZoomTuning.shared.params
+        if t.openUsesCurve {
+            // Cubic Bézier: x1 pulls the start into an ease-in, (1 - x2) the
+            // landing into an ease-out. No overshoot.
+            return .timingCurve(t.openEaseIn, 0, 1 - t.openEaseOut, 1, duration: t.openDuration)
+        }
+        return .interpolatingSpring(duration: t.openDuration, bounce: t.openBounce, initialVelocity: t.openKick)
+    }
+    private var closeZoom: Animation {
+        let t = DetailZoomTuning.shared.params
+        return .interpolatingSpring(duration: t.closeDuration, bounce: t.closeBounce, initialVelocity: t.closeKick)
+    }
+    /// Toolbar/title hand-off, animated separately from the un-animated zoom
+    /// mount so the items crossfade instead of snapping.
+    private var chromeSwap: Animation { .easeInOut(duration: DetailZoomTuning.shared.params.chromeSwap) }
+
+    /// Small end of a zoom for `game`: the on-screen card when there is one
+    /// (with its art as the ghost if it's loaded), else a centred inset of
+    /// the stage with no ghost — the page just scales up and fades in (hero
+    /// button, downloads popover).
+    private func makeZoom(for game: Game) -> DetailZoom {
+        let stage = CGRect(origin: .zero, size: stageSize)
+        if let card = DetailTransitionRegistry.shared.card(for: game.id),
+           card.artFrame.width > 0, card.artFrame.intersects(stage) {
+            let poster = DetailZoom.posterImage(for: game, card: card)
+            return DetailZoom(gameID: game.id,
+                              cardRect: card.visualArtFrame,
+                              poster: poster,
+                              sourceLayoutFrame: poster == nil ? nil : card.artFrame)
+        }
+        let inset = CGFloat(DetailZoomTuning.shared.params.fallbackInset)
+        return DetailZoom(gameID: game.id,
+                          cardRect: stage.insetBy(dx: stage.width * inset, dy: stage.height * inset),
+                          poster: nil,
+                          sourceLayoutFrame: nil)
+    }
+
+    /// The flight's destination: `zoomProgress` is the MODEL value, which jumps
+    /// to the target the instant a flight starts (the modifiers interpolate).
+    private var isClosing: Bool { zoom != nil && zoomProgress == 0 && selectedGame != nil }
+
+    /// Open: mount the page at progress 0 (card-sized, under the opaque
+    /// ghost) in one un-animated commit; the page's `onAppear` then starts
+    /// the flight via `beginPendingOpen`. Never waits on a running close —
+    /// that one is finalised on the spot and the new open begins at once.
+    private func openDetail(_ game: Game) {
+        if selectedGame != nil {
+            if isClosing {
+                var t = Transaction()
+                t.disablesAnimations = true
+                withTransaction(t) { selectedGame = nil }
+            } else {
+                // A detail is already up (Downloads popover): swap in place —
+                // the page's `.id(game.id)` re-creates it for the new game.
+                if zoom == nil { selectedGame = game }
+                return
             }
-        )
-    }
+        }
+        guard stageSize.width > 0 else {
+            selectedGame = game
+            detailChrome = true
+            zoomProgress = 1
+            return
+        }
 
-    private func beginDetailClose() {
-        guard !detailClosing else { return }
-        detailClosing = true
-    }
-
-    private func finishDetailClose() {
+        zoomGeneration += 1
         var t = Transaction()
         t.disablesAnimations = true
-        withTransaction(t) { selectedGame = nil }
-        detailClosing = false
+        withTransaction(t) {
+            landing = false
+            ghostOpacity = 1
+            zoomProgress = 0
+            zoom = makeZoom(for: game)
+            pendingOpen = true
+            selectedGame = game
+        }
+        withAnimation(chromeSwap) { detailChrome = true }
+        armZoomWatchdog()
+    }
+
+    /// Second half of `openDetail`, run from the page's `onAppear` once it has
+    /// committed at progress 0.
+    private func beginPendingOpen() {
+        guard pendingOpen else { return }
+        pendingOpen = false
+        let generation = zoomGeneration
+        withAnimation(openZoom, completionCriteria: .removed) {
+            zoomProgress = 1
+        } completion: {
+            guard generation == zoomGeneration else { return }
+            zoom = nil
+        }
+    }
+
+    /// Close: the same zoom in reverse — page shrinks into the card while the
+    /// art dissolves back over it and the library comes forward. Works
+    /// mid-open too (retargets from the current progress). Once settled, the
+    /// card shows its own art and the ghost fades off it (landing crossfade).
+    private func closeDetail() {
+        guard let game = selectedGame, !isClosing else { return }
+        zoomGeneration += 1
+        let generation = zoomGeneration
+        pendingOpen = false
+        landing = false
+        ghostOpacity = 1
+
+        // At progress ≈ 1 every zoom renders the full stage, so swapping in
+        // the return zoom (fresh card frame, current hover state) is invisible.
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) { zoom = makeZoom(for: game) }
+        withAnimation(chromeSwap) { detailChrome = false }
+
+        withAnimation(closeZoom, completionCriteria: .removed) {
+            zoomProgress = 0
+        } completion: {
+            guard generation == zoomGeneration else { return }
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) {
+                selectedGame = nil
+                landing = true
+            }
+            withAnimation(.easeOut(duration: DetailZoomTuning.shared.params.landingFade)) {
+                ghostOpacity = 0
+            } completion: {
+                guard generation == zoomGeneration else { return }
+                var t = Transaction()
+                t.disablesAnimations = true
+                withTransaction(t) {
+                    zoom = nil
+                    landing = false
+                    ghostOpacity = 1
+                }
+            }
+        }
+        armZoomWatchdog()
+    }
+
+    /// Sidebar navigation swaps the root outright — drop any detail and
+    /// in-flight motion so the new page appears in its resting state.
+    private func resetDetailTransition() {
+        zoomGeneration += 1
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) {
+            pendingOpen = false
+            zoom = nil
+            zoomProgress = 0
+            detailChrome = false
+            landing = false
+            ghostOpacity = 1
+            selectedGame = nil
+        }
+    }
+
+    /// Safety net: if an animation completion ever fails to fire, force the
+    /// zoom to whichever resting state it was heading for so the UI can never
+    /// be locked mid-flight. Generation-guarded so a later flight is never
+    /// clobbered by an earlier watchdog.
+    private func armZoomWatchdog() {
+        let generation = zoomGeneration
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2.5))
+            guard generation == zoomGeneration, zoom != nil else { return }
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) {
+                let opening = pendingOpen || zoomProgress > 0.5
+                pendingOpen = false
+                zoom = nil
+                zoomProgress = opening ? 1 : 0
+                detailChrome = opening
+                landing = false
+                ghostOpacity = 1
+                if !opening { selectedGame = nil }
+            }
+        }
     }
 }
 

@@ -17,6 +17,14 @@ private enum GameDetailMetrics {
 struct GameDetailView: View {
     let game: Game
     let onDismiss: () -> Void
+    /// False from the first frame of the close zoom, so the toolbar hands
+    /// back to the library page as the page starts to shrink.
+    var showsToolbar: Bool = true
+    /// False while the zoom is in flight. The page's blur-based colour bleeds
+    /// (ambient backdrop, banner glow, info-card wash) shimmer when rendered
+    /// under a changing transform, so they're not rendered at all mid-flight
+    /// and fade in once the page has landed.
+    var showsAmbient: Bool = true
 
     @Environment(SteamLibraryStore.self)  private var library
     @Environment(WineEngine.self)         private var engine
@@ -33,8 +41,6 @@ struct GameDetailView: View {
     @State private var appDetails: AppDetails? = nil
     /// Width÷height from the loaded hero `NSImage` (falls back to Steam's typical 1920×622 until decode).
     @State private var heroAspectRatio: CGFloat = SteamLibraryHeroMetrics.aspectRatio
-    /// Drives the zoom-in appear animation.
-    @State private var appeared = false
     /// Banner image loaded directly — avoids the `GeometryReader` wrapper inside
     /// `HeroBannerImage`, which introduced an internal CALayer boundary that
     /// produced a faint rounded-corner artefact at the clip boundary on macOS 15.
@@ -71,6 +77,25 @@ struct GameDetailView: View {
         contentWidth / heroAspectRatio
     }
 
+    init(game: Game, onDismiss: @escaping () -> Void, showsToolbar: Bool = true, showsAmbient: Bool = true) {
+        self.game = game
+        self.onDismiss = onDismiss
+        self.showsToolbar = showsToolbar
+        self.showsAmbient = showsAmbient
+        // Memory-tier hit → the page mounts with its banner already laid out,
+        // so the zoom never re-lays the page out mid-flight when the hero
+        // (and its aspect ratio) would otherwise land a few frames in.
+        let urls = game.newCDNHeroURLs + [game.heroURL] + game.heroURLFallbacks
+        for url in urls {
+            guard let img = ImageCache.shared.memoryImage(for: url) else { continue }
+            let r = img.size.width / img.size.height
+            if r > 0.05, r < 20 { _heroAspectRatio = State(initialValue: r) }
+            _bannerImage = State(initialValue: img)
+            _bannerGlowColors = State(initialValue: ImageCache.shared.cachedEdgeColors(for: url))
+            break
+        }
+    }
+
     var body: some View {
         // Read isFavorite at body-evaluation time so SwiftUI's @Observable tracking
         // registers the dependency here, not inside the toolbar closure where macOS
@@ -105,80 +130,88 @@ struct GameDetailView: View {
             }
         }
         .background { ambientBackdrop }
-        .scaleEffect(appeared ? 1 : 0.94, anchor: .center)
-        .opacity(appeared ? 1 : 0)
-        .blur(radius: appeared ? 0 : 6)
-        .onAppear {
-            withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
-                appeared = true
-            }
-        }
-        .navigationTitle(currentGame.name)
+        .animation(Self.ambientFade, value: showsAmbient)
+        // Title is set by ContentView's stage (shared with the root page).
+        // The native back button is replaced with an identical toolbar button
+        // (same slot, same 30×28 footprint) routed through onDismiss, where
+        // ContentView plays the reverse zoom.
+        .navigationBarBackButtonHidden(true)
         .toolbar {
-            // A flexible-space item pushes everything after it to the trailing
-            // end of the macOS toolbar (equivalent to NSToolbarFlexibleSpaceItem).
-            // Without it, .automatic items cluster on the leading side next to
-            // the back button. The ToolbarItemGroup after the spacer renders as
-            // the Tahoe glass pill on the right side of the toolbar.
-            ToolbarItem(placement: .automatic) {
-                Spacer()
-            }
-            ToolbarItemGroup(placement: .automatic) {
-                Button {
-                    library.toggleFavorite(appID: currentGame.id)
-                } label: {
-                    Image(systemName: isFavorite ? "heart.fill" : "heart")
-                        .foregroundStyle(isFavorite ? .pink : .primary)
+            // Dropped the instant the close zoom starts (ContentView flips
+            // `showsToolbar`) so the toolbar hands back to the library page
+            // at the same moment the page begins to shrink.
+            if showsToolbar {
+                ToolbarItem(placement: .navigation) {
+                    Button(action: onDismiss) {
+                        Image(systemName: "chevron.backward")
+                            .frame(width: 20)
+                    }
+                    .help("Back")
                 }
-                .help(isFavorite ? "Remove from Favorites" : "Add to Favorites")
-
-                Menu {
-                    // Launch mode moved out of this menu into the split Play
-                    // button (HANDOFF-2026-07-03-v6 Goal 1) — the mode is a
-                    // first-class control on the Play button itself, not a
-                    // buried setting.
+                // A flexible-space item pushes everything after it to the trailing
+                // end of the macOS toolbar (equivalent to NSToolbarFlexibleSpaceItem).
+                // Without it, .automatic items cluster on the leading side next to
+                // the back button. The ToolbarItemGroup after the spacer renders as
+                // the Tahoe glass pill on the right side of the toolbar.
+                ToolbarItem(placement: .automatic) {
+                    Spacer()
+                }
+                ToolbarItemGroup(placement: .automatic) {
                     Button {
-                        openWindow(id: "launch-log")
+                        library.toggleFavorite(appID: currentGame.id)
                     } label: {
-                        Label("View Launch Logs", systemImage: "terminal")
+                        Image(systemName: isFavorite ? "heart.fill" : "heart")
+                            .foregroundStyle(isFavorite ? .pink : .primary)
                     }
+                    .help(isFavorite ? "Remove from Favorites" : "Add to Favorites")
 
-                    Button {
-                        NSWorkspace.shared.open(GameLogFile.currentURL(for: currentGame.id))
-                    } label: {
-                        Label("Open Game Log", systemImage: "doc.text")
-                    }
-                    .disabled(!gameLogExists)
-                    .help("Raw Wine output + the resolved graphics stack for the last launch")
-
-                    Button {
-                        NSWorkspace.shared.open(GameLogFile.engineLogURL(for: currentGame.id))
-                    } label: {
-                        Label("Open Engine Log", systemImage: "doc.text.magnifyingglass")
-                    }
-                    .disabled(!engineLogExists)
-                    .help("The game engine's own log (Unity Player.log / Unreal) from the last launch")
-
-                    if currentGame.isInstalled {
-                        Divider()
-                        Button(role: .destructive) {
-                            launcher.uninstall(game: currentGame, engine: engine)
+                    Menu {
+                        // Launch mode moved out of this menu into the split Play
+                        // button (HANDOFF-2026-07-03-v6 Goal 1) — the mode is a
+                        // first-class control on the Play button itself, not a
+                        // buried setting.
+                        Button {
+                            openWindow(id: "launch-log")
                         } label: {
-                            Label("Uninstall", systemImage: "trash")
+                            Label("View Launch Logs", systemImage: "terminal")
                         }
+
+                        Button {
+                            NSWorkspace.shared.open(GameLogFile.currentURL(for: currentGame.id))
+                        } label: {
+                            Label("Open Game Log", systemImage: "doc.text")
+                        }
+                        .disabled(!gameLogExists)
+                        .help("Raw Wine output + the resolved graphics stack for the last launch")
+
+                        Button {
+                            NSWorkspace.shared.open(GameLogFile.engineLogURL(for: currentGame.id))
+                        } label: {
+                            Label("Open Engine Log", systemImage: "doc.text.magnifyingglass")
+                        }
+                        .disabled(!engineLogExists)
+                        .help("The game engine's own log (Unity Player.log / Unreal) from the last launch")
+
+                        if currentGame.isInstalled {
+                            Divider()
+                            Button(role: .destructive) {
+                                launcher.uninstall(game: currentGame, engine: engine)
+                            } label: {
+                                Label("Uninstall", systemImage: "trash")
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis")
                     }
-                } label: {
-                    Image(systemName: "ellipsis")
+                    // Suppress the automatic disclosure chevron that SwiftUI adds
+                    // to Menu labels in toolbars — the three dots are sufficient.
+                    .menuIndicator(.hidden)
+                    .help("More options")
                 }
-                // Suppress the automatic disclosure chevron that SwiftUI adds
-                // to Menu labels in toolbars — the three dots are sufficient.
-                .menuIndicator(.hidden)
-                .help("More options")
             }
         }
         .onExitCommand(perform: onDismiss)
         .onChange(of: game.id) { _, newID in
-            appeared = false
             heroAspectRatio = SteamLibraryHeroMetrics.aspectRatio
             appDetails = nil
             bannerImage = nil
@@ -259,13 +292,14 @@ struct GameDetailView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background {
                 Color(nsColor: .windowBackgroundColor)
-                if let img = bannerImage {
+                if showsAmbient, let img = bannerImage {
                     Image(nsImage: img)
                         .resizable()
                         .aspectRatio(contentMode: .fill)
                         .blur(radius: 60)
                         .saturation(1.2)
                         .opacity(0.25)
+                        .transition(.opacity)
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
@@ -287,7 +321,7 @@ struct GameDetailView: View {
     /// and behind the navigation bar, matching the Apple Music album feel.
     @ViewBuilder
     private var ambientBackdrop: some View {
-        if let img = bannerImage {
+        if showsAmbient, let img = bannerImage {
             Image(nsImage: img)
                 .resizable()
                 .aspectRatio(contentMode: .fill)
@@ -295,8 +329,12 @@ struct GameDetailView: View {
                 .blur(radius: 80)
                 .saturation(1.2)
                 .opacity(0.12)
+                .transition(.opacity)
         }
     }
+
+    /// Bleed fade once the zoom has landed (and out as a close begins).
+    private static var ambientFade: Animation { .easeOut(duration: DetailZoomTuning.shared.params.ambientFade) }
 
     // MARK: - Steam prompt copy
 
@@ -396,12 +434,12 @@ struct GameDetailView: View {
             .clipShape(RoundedRectangle(cornerRadius: GameDetailMetrics.cardCornerRadius, style: .continuous))
             // Behind the clipped hero so the blur bleeds past its edges
             // (added after clipShape → the glow itself is not clipped).
-            // The banner is the page's statement piece — wider spread than cards.
             .background {
-                ArtGlowBackground(colors: bannerGlowColors,
-                                  cornerRadius: GameDetailMetrics.cardCornerRadius,
-                                  spread: 16,
-                                  blurRadius: 48)
+                if showsAmbient {
+                    ArtGlowBackground(colors: bannerGlowColors,
+                                      cornerRadius: GameDetailMetrics.cardCornerRadius)
+                        .transition(.opacity)
+                }
             }
     }
 
@@ -412,6 +450,14 @@ struct GameDetailView: View {
     /// so the banner can render as a plain `Image` with no `GeometryReader`.
     private func loadBannerImage() async {
         let urls = currentGame.newCDNHeroURLs + [currentGame.heroURL] + currentGame.heroURLFallbacks
+
+        // Preloaded by init from the memory tier — only the glow may be missing.
+        if let img = bannerImage {
+            if bannerGlowColors == nil, let url = urls.first(where: { ImageCache.shared.memoryImage(for: $0) === img }) {
+                bannerGlowColors = await ImageCache.shared.edgeColors(for: img, url: url)
+            }
+            return
+        }
 
         for url in urls {
             if let cached = await ImageCache.shared.imageAsync(for: url) {
@@ -759,7 +805,13 @@ struct GameDetailView: View {
 
             if achievementsLoading {
                 HStack(spacing: 8) {
-                    ProgressView().scaleEffect(0.7)
+                    // The spinner is an NSProgressIndicator; laid out inside the
+                    // zoom's scaled page it trips SwiftUI's platform-view length
+                    // assertion. Reserve its 32×32 footprint (measured) and
+                    // mount it only once the page has landed.
+                    Color.clear
+                        .frame(width: 32, height: 32)
+                        .overlay { if showsAmbient { ProgressView().scaleEffect(0.7) } }
                     Text("Loading…")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
@@ -782,9 +834,17 @@ struct GameDetailView: View {
                 if storeTotal > 0 {
                     let progress = Double(unlocked.count) / Double(storeTotal)
                     VStack(alignment: .leading, spacing: 4) {
-                        ProgressView(value: progress)
-                            .progressViewStyle(.linear)
-                            .tint(.accentColor)
+                        // Same platform-view guard as the spinner (20 pt tall, measured).
+                        Color.clear
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 20)
+                            .overlay {
+                                if showsAmbient {
+                                    ProgressView(value: progress)
+                                        .progressViewStyle(.linear)
+                                        .tint(.accentColor)
+                                }
+                            }
                         Text(unlocked.count == 0
                              ? "None unlocked yet — keep playing!"
                              : "\(unlocked.count) of \(storeTotal) unlocked")

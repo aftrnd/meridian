@@ -42,6 +42,8 @@
 		B00E0007 /* GameProcess.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00E0008 /* GameProcess.swift */; };
 		B00E0009 /* EngineSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00E000A /* EngineSetupView.swift */; };
 		B00E0020 /* CachedAsyncImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00E0021 /* CachedAsyncImage.swift */; };
+		B0DE0001 /* DetailTransition.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0DE0002 /* DetailTransition.swift */; };
+		B0DE0003 /* DetailZoomTuning.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0DE0004 /* DetailZoomTuning.swift */; };
 		B00E0030 /* EngineDownloader.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00E0031 /* EngineDownloader.swift */; };
 		B00E0040 /* TerminationCleanup.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00E0041 /* TerminationCleanup.swift */; };
 		B00E0050 /* SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00E0051 /* SearchView.swift */; };
@@ -107,6 +109,8 @@
 		B00E0008 /* GameProcess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameProcess.swift; sourceTree = "<group>"; };
 		B00E000A /* EngineSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineSetupView.swift; sourceTree = "<group>"; };
 		B00E0021 /* CachedAsyncImage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CachedAsyncImage.swift; sourceTree = "<group>"; };
+		B0DE0002 /* DetailTransition.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetailTransition.swift; sourceTree = "<group>"; };
+		B0DE0004 /* DetailZoomTuning.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetailZoomTuning.swift; sourceTree = "<group>"; };
 		B00E0031 /* EngineDownloader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineDownloader.swift; sourceTree = "<group>"; };
 		B00E0041 /* TerminationCleanup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminationCleanup.swift; sourceTree = "<group>"; };
 		B00E0051 /* SearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchView.swift; sourceTree = "<group>"; };
@@ -239,6 +243,8 @@
 				B0010029 /* GameGridView.swift */,
 				B001002B /* GameDetailView.swift */,
 				B00E0021 /* CachedAsyncImage.swift */,
+				B0DE0002 /* DetailTransition.swift */,
+				B0DE0004 /* DetailZoomTuning.swift */,
 				B00E00C1 /* HeroArtViews.swift */,
 			);
 			path = Library;
@@ -478,6 +484,8 @@
 				B00E00C0 /* HeroArtViews.swift in Sources */,
 				B00E0009 /* EngineSetupView.swift in Sources */,
 				B00E0020 /* CachedAsyncImage.swift in Sources */,
+				B0DE0001 /* DetailTransition.swift in Sources */,
+				B0DE0003 /* DetailZoomTuning.swift in Sources */,
 				B0010030 /* SettingsView.swift in Sources */,
 				B0010032 /* AuthView.swift in Sources */,
 				B0010034 /* AppSettings.swift in Sources */,

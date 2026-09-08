@@ -81,10 +81,6 @@ struct CachedAsyncImage<Content: View>: View {
 struct ArtGlowBackground: View {
     let colors: ImageCache.EdgeColors?
     var cornerRadius: CGFloat = 12
-    /// How far the glow plate extends past the art edge (8-pt grid).
-    var spread: CGFloat = 8
-    /// Blur radius — how softly the color radiates (8-pt grid).
-    var blurRadius: CGFloat = 32
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -100,10 +96,10 @@ struct ArtGlowBackground: View {
                     ],
                     colors: c.mesh
                 ))
-                // Glow plate extends past the card, then a wide blur —
-                // radiates well beyond the edges instead of hugging them.
-                .padding(-spread)
-                .blur(radius: blurRadius)
+                // Glow plate extends 8 pt past the card, then a wide 32 pt
+                // blur — radiates well beyond the edges instead of hugging them.
+                .padding(-8)
+                .blur(radius: 32)
                 .saturation(colorScheme == .dark ? 1.0 : 1.3)
                 .opacity(colorScheme == .dark ? 0.47 : 0.6)
                 .allowsHitTesting(false)
