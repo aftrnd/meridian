@@ -58,7 +58,6 @@ struct LibraryView: View {
                 gameGrid
             }
         }
-        .navigationTitle(categoryTitle ?? "")
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { containerWidth = $0 }
     }
 

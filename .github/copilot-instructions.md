@@ -11,7 +11,7 @@ Meridian is a native Swift 6 / SwiftUI macOS app (macOS 15+) that plays PC (Stea
 | `Meridian/Launch/` | `Launcher` (launch orchestration: offline gbe_fork emulator vs online steam.exe `-applaunch`), `DepotDownloaderInstall` (native arm64 DepotDownloader fork, NDJSON progress) |
 | `Meridian/Steam/` | `SteamSession` (steam.exe lifecycle, local.vdf JWT), `SteamCredentialAuth` (RSA + Steam Guard), `SteamLibraryStore` (game list + install-state polling), `SteamAPIService`, `SteamAppInfoResolver` (PICS via DepotDownloader `-appinfo`), `SteamWindow` (Wine window suppression) |
 | `Meridian/Models/` | `Game`, `AppSettings` (@Observable UserDefaults-backed singleton), `CategoryStore`, `GameArtOverrides` |
-| `Meridian/Views/` | SwiftUI UI: `ContentView`, `HomeView`, `Library/` (grid, detail, `CachedAsyncImage` + `ImageCache`), `Auth/`, `Friends/`, `Settings/`, `Downloads/` |
+| `Meridian/Views/` | SwiftUI UI: `ContentView` (detail column is a ZStack "stage": root page always mounted + `GameDetailView` zoomed in over it — no NavigationStack push), `HomeView` (`HeroCarousel` pager), `Library/` (grid, detail, `DetailTransition` zoom model/modifiers, `DetailZoomTuning` live-tuning window ⌥⌘Z, `CachedAsyncImage` + `ImageCache`), `Auth/`, `Friends/`, `Settings/`, `Downloads/` |
 | `Meridian/Utilities/` | `MeridianLog` (os.log + disk file at `~/Library/Application Support/com.meridian.app/logs/meridian.log`) |
 
 Runtime data lives under `~/Library/Application Support/com.meridian.app/` (engine/, bottles/steam/, logs/). Image cache: `~/Library/Caches/com.meridian.app/images/`.
@@ -42,4 +42,5 @@ Xcode project (`Meridian.xcodeproj`) is for signing/entitlements/IDE. Many tests
 - Performance work: see `.github/instructions/swiftui-performance.instructions.md` and track all changes in `docs/PERFORMANCE-IMPROVEMENTS.md`.
 - Don't add SPM dependencies — the app is intentionally dependency-free.
 - Don't block the main actor with disk I/O, image decoding, or process spawning; hop off with `Task.detached` or nonisolated async functions.
+- Card↔detail zoom rules: the root page must never be transformed (dim/alpha only); blur bleeds and AppKit-backed views (`ProgressView`) inside `GameDetailView` mount only after landing (`showsAmbient`); pages must not set `.navigationTitle` (ContentView owns it); the page's `.onAppear` stays INSIDE `.id(game.id)`. Motion constants live in `DetailZoomParameters` — tune via the window, then paste the literal back as defaults.
 - Steam auth uses JWT refresh tokens (never store passwords). Token lives DPAPI-encrypted in the Wine prefix's `local.vdf`.

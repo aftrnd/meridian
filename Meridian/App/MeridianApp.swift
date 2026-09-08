@@ -15,6 +15,7 @@ struct MeridianApp: App {
     @State private var categories       = CategoryStore()
     @State private var updateChecker    = AppUpdateChecker()
     @State private var engineDownloader = EngineDownloader()
+    @Environment(\.openWindow) private var openWindow
 
     private let settings = AppSettings.shared
 
@@ -81,8 +82,19 @@ struct MeridianApp: App {
                     steamAuth.signOut()
                 }
                 .disabled(!steamAuth.isAuthenticated)
+                Divider()
+                Button("Zoom Tuning…") {
+                    openWindow(id: "zoom-tuning")
+                }
+                .keyboardShortcut("z", modifiers: [.command, .option])
             }
         }
+
+        Window("Zoom Tuning", id: "zoom-tuning") {
+            DetailZoomTuningWindow()
+        }
+        .windowResizability(.contentMinSize)
+        .defaultSize(width: 560, height: 720)
 
         WindowGroup("Launch Log", id: "launch-log") {
             LaunchLogWindow()

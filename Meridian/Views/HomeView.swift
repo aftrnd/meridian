@@ -14,8 +14,6 @@ struct HomeView: View {
     /// chevrons inward so they stay visible at the panel edge.
     @Environment(\.friendsPanelCoverWidth) private var coverWidth
 
-    @State private var carouselIndex: Int = 0
-    @State private var carouselTimer: Timer?
     @State private var updateBannerDismissed = false
     /// Measured on homeContent so all fixed-position elements share the same
     /// leading inset as the GameScrollRow section titles and cards.
@@ -52,11 +50,6 @@ struct HomeView: View {
 
     private static let sectionSpacing: CGFloat = 28
     private static let carouselCount = 5
-    private static let carouselInterval: TimeInterval = 20
-
-    private var carouselGames: [Game] {
-        Array(library.recentlyPlayedGames.prefix(Self.carouselCount))
-    }
 
     var body: some View {
         Group {
@@ -65,12 +58,6 @@ struct HomeView: View {
             } else {
                 homeContent
             }
-        }
-        .navigationTitle("")
-        .onAppear { startCarouselTimer() }
-        .onDisappear { carouselTimer?.invalidate() }
-        .onChange(of: library.games.count) { _, _ in
-            restartCarouselTimer()
         }
         .onChange(of: updateBannerKey) { _, _ in
             updateBannerDismissed = false
@@ -95,7 +82,9 @@ struct HomeView: View {
         return ScrollView {
             VStack(alignment: .leading, spacing: Self.sectionSpacing) {
                 if !carousel.isEmpty {
-                    heroCarousel(games: carousel)
+                    HeroCarousel(games: carousel, heroInset: heroInset, coverWidth: coverWidth) { game in
+                        selectedGame = game
+                    }
                 }
 
                 // Inline update notification — sits naturally within the scroll flow
@@ -216,164 +205,6 @@ struct HomeView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    // MARK: - Hero Carousel
-
-    private func heroCarousel(games: [Game]) -> some View {
-        let safeIndex = games.isEmpty ? 0 : carouselIndex % games.count
-        let game = games.isEmpty ? nil : games[safeIndex]
-
-        return ZStack(alignment: .bottomLeading) {
-            if let game {
-                HeroBannerImage(urls: game.newCDNHeroURLs + [game.heroURL] + game.heroURLFallbacks)
-                    .id(game.id)
-                    .transition(.heroDissolve)
-                    .applyBackgroundExtension()
-            }
-
-            LinearGradient(
-                colors: [.clear, .black.opacity(0.75)],
-                startPoint: .init(x: 0.5, y: 0.3),
-                endPoint: .bottom
-            )
-
-            // ── Logo ──────────────────────────────────────────────────────────
-            // alignment: .leading  =  Alignment(.leading, .center) in SwiftUI —
-            // horizontally anchored to leadingInset, vertically centred in the
-            // full 302 pt banner height. No VStack+Spacer needed; the frame's
-            // alignment does both jobs in one modifier.
-            if let game {
-                HeroLogoImage(
-                    urls: game.newCDNLogoURLs + [game.logoURL] + game.logoURLFallbacks,
-                    fallbackName: game.name
-                )
-                .padding(.leading, heroInset)
-                .padding(.trailing, 24)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-                .id(game.id)
-                .transition(.heroCaption)
-            }
-
-            // ── Subtitle + button ─────────────────────────────────────────────
-            // All values derived from user specifications (÷2 = @2x → pt):
-            //
-            //   .padding(.bottom, 22.25)
-            //     msg1 baseline  62.5 px ÷ 2  = 31.25 pt  button bottom from banner bottom
-            //     msg2  −9 px ÷ 2 = −4.5 pt   → 26.75 pt
-            //     msg3  −9 px ÷ 2 = −4.5 pt   → 22.25 pt  ← final
-            //
-            //   Spacer().frame(height: 15.5)
-            //     msg1 baseline  36 px ÷ 2  = 18 pt   subtitle bottom to button top
-            //     msg2  −5 px ÷ 2 = −2.5 pt  → 15.5 pt  ← final (msg3: "perfect, unchanged")
-            if let game {
-                VStack(alignment: .leading, spacing: 0) {
-                    Spacer()
-                    Text(heroBannerSubtitle(for: game))
-                        .font(.callout)
-                        .foregroundStyle(.white.opacity(0.7))
-                        .lineLimit(2)
-                    Spacer().frame(height: 15.5)
-                    Button {
-                        selectedGame = game
-                    } label: {
-                        Label("Continue Playing", systemImage: "play.fill")
-                            .font(.headline)
-                            .frame(minWidth: 140, minHeight: 24)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 6)
-                            .modifier(HeroGlassCapsule())
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(controlActiveState == .inactive ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
-                }
-                .padding(.leading, heroInset)
-                .padding(.trailing, 24)
-                .padding(.bottom, 26.75)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-                .id(game.id)
-                .transition(.heroCaption)
-            }
-
-            if games.count > 1 {
-                VStack {
-                    Spacer()
-                    carouselIndicators(count: games.count, current: safeIndex)
-                        .padding(.bottom, 12)
-                }
-                .frame(maxWidth: .infinity)
-                // Re-center the page dots within the VISIBLE strip while the
-                // friends panel covers the trailing edge (they're laid out in
-                // the full locked hero width, so without this they sit
-                // off-center between the sidebar and the panel).
-                .offset(x: -coverWidth / 2)
-            }
-        }
-        .overlay(alignment: .leading) {
-            if games.count > 1 {
-                ChevronNavButton(direction: .back, isVisible: true) {
-                    let count = carouselGames.count
-                    guard count > 1 else { return }
-                    withAnimation(.smooth(duration: 0.7)) {
-                        carouselIndex = (carouselIndex - 1 + count) % count
-                    }
-                    restartCarouselTimer()
-                }
-                // Centre the button within the leading-inset strip.
-                .padding(.leading, max(0, (heroInset - 24) / 2))
-            }
-        }
-        .overlay(alignment: .trailing) {
-            if games.count > 1 {
-                ChevronNavButton(direction: .forward, isVisible: true) {
-                    let count = carouselGames.count
-                    guard count > 1 else { return }
-                    withAnimation(.smooth(duration: 0.7)) {
-                        carouselIndex = (carouselIndex + 1) % count
-                    }
-                    restartCarouselTimer()
-                }
-                // Shift inward past the friends panel so the chevron stays
-                // visible at the panel edge, mirroring the leading side.
-                .padding(.trailing, max(0, (heroInset - 24) / 2) + coverWidth)
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .frame(height: 302)
-    }
-
-    private func carouselIndicators(count: Int, current: Int) -> some View {
-        HStack(spacing: 6) {
-            ForEach(0..<count, id: \.self) { i in
-                Circle()
-                    .fill(.white.opacity(i == current ? 1.0 : 0.4))
-                    .frame(width: 6, height: 6)
-                    .onTapGesture {
-                        carouselIndex = i
-                        restartCarouselTimer()
-                    }
-            }
-        }
-        .padding(.vertical, 4)
-    }
-
-    private func startCarouselTimer() {
-        guard carouselGames.count > 1 else { return }
-        carouselTimer = Timer.scheduledTimer(withTimeInterval: Self.carouselInterval, repeats: true) { _ in
-            Task { @MainActor in
-                let count = carouselGames.count
-                guard count > 1 else { return }
-                // Spring keeps the dissolve frame-rate independent (60/120 Hz).
-                withAnimation(.smooth(duration: 0.7)) {
-                    carouselIndex = (carouselIndex + 1) % count
-                }
-            }
-        }
-    }
-
-    private func restartCarouselTimer() {
-        carouselTimer?.invalidate()
-        startCarouselTimer()
-    }
-
     // MARK: - Friend Activity
 
     private var friendActivitySection: some View {
@@ -398,12 +229,6 @@ struct HomeView: View {
     }
 
     // MARK: - Shared helpers
-
-    private func heroBannerSubtitle(for game: Game) -> String {
-        let time = game.playtime2WeekFormatted ?? game.playtimeFormatted
-        let qualifier = game.playtime2WeekFormatted != nil ? "in the last two weeks" : "recently"
-        return "You've played \(game.name) for \(time) \(qualifier)."
-    }
 
     private func sectionHeader(_ title: String) -> some View {
         Text(title)
@@ -454,31 +279,391 @@ struct HomeView: View {
     }
 }
 
-// MARK: - Hero Carousel Transitions
+// MARK: - Hero Carousel
 
-private struct HeroBlurModifier: ViewModifier {
-    let radius: CGFloat
-    func body(content: Content) -> some View { content.blur(radius: radius) }
-}
+/// Horizontal, swipeable hero pager. One continuous `position` (in pages,
+/// unbounded — the game is `position mod count`, so it wraps forever) drives
+/// every layer through an Animatable parallax: the logo travels furthest and
+/// so leaves/arrives first, then the subtitle, then the button, while the art
+/// slides a fraction and crossfades — a cascade that is a function of
+/// POSITION, so a trackpad swipe, an arrow click and the auto-advance all
+/// produce the exact same motion. Owns its timer and gesture state so the
+/// per-frame value never re-evaluates HomeView's body.
+private struct HeroCarousel: View {
+    let games: [Game]
+    let heroInset: CGFloat
+    let coverWidth: CGFloat
+    let onSelect: (Game) -> Void
 
-extension AnyTransition {
-    /// Cinematic dissolve for the hero art: crossfade + defocus. Composites
-    /// entirely on the GPU (opacity + blur) — no layout — so it renders
-    /// full-rate on 60 and 120 Hz displays alike.
-    /// Computed (not stored) — AnyTransition isn't Sendable, so stored statics
-    /// trip strict concurrency.
-    static var heroDissolve: AnyTransition {
-        .modifier(active: HeroBlurModifier(radius: 12), identity: HeroBlurModifier(radius: 0))
-        .combined(with: .opacity)
+    @Environment(\.controlActiveState) private var controlActiveState
+
+    /// Continuous page position. Whole numbers are resting pages.
+    @State private var position: CGFloat = 0
+    @State private var frame: CGRect = .zero
+    @State private var timer: Timer?
+    @State private var wheel = HeroWheelGesture()
+
+    /// Auto-advance cadence — long enough to read the hero, short enough that
+    /// the row feels alive.
+    private static let interval: TimeInterval = 20
+    /// Page spring: flung (initial kick) with a hint of settle — snappy, not
+    /// floaty. Swipe releases build their own spring from the fling velocity.
+    private static let page = Animation.interpolatingSpring(duration: 0.45, bounce: 0.12, initialVelocity: 2.5)
+
+    // Parallax rates (widths travelled per page) — the cascade order. The
+    // art itself doesn't travel: two banners sliding past each other read as
+    // a hard seam, and the sidebar extension went black where neither
+    // covered. It dissolves in place instead.
+    private static let logoRate: CGFloat = 1.25
+    private static let subtitleRate: CGFloat = 0.95
+    private static let buttonRate: CGFloat = 0.72
+
+    private var count: Int { games.count }
+    private var current: Int { Int(position.rounded()) }
+    private var currentIndex: Int { wrapped(current) }
+    /// Resting page ± 1 stay mounted so the neighbours are already loaded
+    /// when a swipe starts, and the outgoing page rides out under animation.
+    private var mountedPages: [Int] { count > 1 ? [current - 1, current, current + 1] : [current] }
+
+    private func wrapped(_ page: Int) -> Int { ((page % count) + count) % count }
+    private func game(at page: Int) -> Game { games[wrapped(page)] }
+
+    var body: some View {
+        ZStack(alignment: .bottomLeading) {
+            ForEach(mountedPages, id: \.self) { page in
+                let g = game(at: page)
+                HeroBannerImage(urls: g.newCDNHeroURLs + [g.heroURL] + g.heroURLFallbacks)
+                    .id(g.id)
+                    .applyBackgroundExtension()
+                    .modifier(HeroPageLayer(position: position, page: page, width: frame.width, dissolve: true))
+            }
+
+            LinearGradient(
+                colors: [.clear, .black.opacity(0.75)],
+                startPoint: .init(x: 0.5, y: 0.3),
+                endPoint: .bottom
+            )
+
+            ForEach(mountedPages, id: \.self) { page in
+                caption(for: game(at: page), page: page)
+            }
+
+            if count > 1 {
+                VStack {
+                    Spacer()
+                    indicators
+                        .padding(.bottom, 12)
+                }
+                .frame(maxWidth: .infinity)
+                // Re-center the page dots within the VISIBLE strip while the
+                // friends panel covers the trailing edge (they're laid out in
+                // the full locked hero width, so without this they sit
+                // off-center between the sidebar and the panel).
+                .offset(x: -coverWidth / 2)
+            }
+        }
+        .overlay(alignment: .leading) {
+            if count > 1 {
+                ChevronNavButton(direction: .back, isVisible: true) { go(-1) }
+                    // Centre the button within the leading-inset strip.
+                    .padding(.leading, max(0, (heroInset - 24) / 2))
+            }
+        }
+        .overlay(alignment: .trailing) {
+            if count > 1 {
+                ChevronNavButton(direction: .forward, isVisible: true) { go(1) }
+                    // Shift inward past the friends panel so the chevron stays
+                    // visible at the panel edge, mirroring the leading side.
+                    .padding(.trailing, max(0, (heroInset - 24) / 2) + coverWidth)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 302)
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame = $0 }
+        .onAppear {
+            startTimer()
+            wheel.install(.init(
+                isInside: { point in frame.contains(point) },
+                drag: { dx in drag(by: dx) },
+                release: { velocity in settle(pointVelocity: velocity) },
+                step: { dir in go(dir) }
+            ))
+        }
+        .onDisappear {
+            timer?.invalidate()
+            wheel.remove()
+        }
+        .onChange(of: count) { _, _ in restartTimer() }
     }
 
-    /// Caption tier (logo, subtitle, button): incoming text rises gently
-    /// while fading; outgoing simply fades so the layers never collide.
-    static var heroCaption: AnyTransition {
-        .asymmetric(
-            insertion: .opacity.combined(with: .offset(y: 12)),
-            removal: .opacity
+    // MARK: Layers
+
+    // ── Logo / subtitle / button ────────────────────────────────────────────────────
+    // Metrics unchanged from the dissolve-era layout (user-specified):
+    //   .padding(.bottom, 26.75)   button bottom from banner bottom
+    //   Spacer().frame(height: 15.5)   subtitle bottom to button top
+    // Each tier is its own parallax layer so the cascade can stagger them.
+    @ViewBuilder
+    private func caption(for g: Game, page: Int) -> some View {
+        let w = frame.width
+
+        HeroLogoImage(
+            urls: g.newCDNLogoURLs + [g.logoURL] + g.logoURLFallbacks,
+            fallbackName: g.name
         )
+        .padding(.leading, heroInset)
+        .padding(.trailing, 24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .id(g.id)
+        .modifier(HeroPageLayer(position: position, page: page, width: w, rate: Self.logoRate, fade: 1.6))
+
+        VStack(alignment: .leading, spacing: 0) {
+            Spacer()
+            Text(Self.subtitle(for: g))
+                .font(.callout)
+                .foregroundStyle(.white.opacity(0.7))
+                .lineLimit(2)
+                .modifier(HeroPageLayer(position: position, page: page, width: w, rate: Self.subtitleRate, fade: 1.6))
+            Spacer().frame(height: 15.5)
+            Button {
+                onSelect(g)
+            } label: {
+                Label("Continue Playing", systemImage: "play.fill")
+                    .font(.headline)
+                    .frame(minWidth: 140, minHeight: 24)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 6)
+                    .modifier(HeroGlassCapsule())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(controlActiveState == .inactive ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
+            .modifier(HeroPageLayer(position: position, page: page, width: w, rate: Self.buttonRate, fade: 1.6))
+        }
+        .padding(.leading, heroInset)
+        .padding(.trailing, 24)
+        .padding(.bottom, 26.75)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .id(g.id)
+    }
+
+    private var indicators: some View {
+        HStack(spacing: 6) {
+            ForEach(0..<count, id: \.self) { i in
+                Circle()
+                    .fill(.white.opacity(i == currentIndex ? 1.0 : 0.4))
+                    .frame(width: 6, height: 6)
+                    .onTapGesture { jump(to: i) }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private static func subtitle(for game: Game) -> String {
+        let time = game.playtime2WeekFormatted ?? game.playtimeFormatted
+        let qualifier = game.playtime2WeekFormatted != nil ? "in the last two weeks" : "recently"
+        return "You've played \(game.name) for \(time) \(qualifier)."
+    }
+
+    // MARK: Navigation
+
+    private func go(_ direction: Int) {
+        guard count > 1 else { return }
+        withAnimation(Self.page) { position = CGFloat(current + direction) }
+        restartTimer()
+    }
+
+    /// Indicator tap: shortest wrapped path to the page.
+    private func jump(to index: Int) {
+        guard count > 1 else { return }
+        var delta = index - currentIndex
+        if delta > count / 2 { delta -= count } else if delta < -count / 2 { delta += count }
+        withAnimation(Self.page) { position = CGFloat(current + delta) }
+        restartTimer()
+    }
+
+    /// Trackpad finger-down: content tracks the fingers 1:1 (no animation).
+    private func drag(by dx: CGFloat) {
+        guard count > 1, frame.width > 0 else { return }
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) { position -= dx / frame.width }
+        timer?.invalidate()
+    }
+
+    /// Fingers up: snap to the nearest page, letting a fling carry into the
+    /// next one; the spring inherits the release velocity so there's no seam
+    /// between the finger's motion and the settle.
+    private func settle(pointVelocity: CGFloat) {
+        guard count > 1, frame.width > 0 else { return }
+        let velocity = pointVelocity / frame.width   // pages per second
+        let carry = min(max(velocity * 0.12, -0.6), 0.6)
+        let nearest = position.rounded()
+        var target = (position + carry).rounded()
+        target = min(max(target, nearest - 1), nearest + 1)
+        let distance = target - position
+        // Relative initial velocity (per SwiftUI): fraction of the remaining
+        // distance per second, positive toward the target.
+        let kick = abs(distance) > 0.001 ? min(max(velocity / distance, 0), 8) : 0
+        withAnimation(.interpolatingSpring(duration: 0.42, bounce: 0.14, initialVelocity: kick)) {
+            position = target
+        }
+        restartTimer()
+    }
+
+    private func startTimer() {
+        guard count > 1 else { return }
+        timer = Timer.scheduledTimer(withTimeInterval: Self.interval, repeats: true) { _ in
+            Task { @MainActor in
+                guard count > 1 else { return }
+                withAnimation(Self.page) { position = CGFloat(current + 1) }
+            }
+        }
+    }
+
+    private func restartTimer() {
+        timer?.invalidate()
+        startTimer()
+    }
+}
+
+/// One hero layer's motion. `rel` = pages this layer's page sits from the
+/// current position (0 = centred).
+/// • Parallax: travel = rel × width × rate, so a higher rate leaves/arrives
+///   first; opacity falls off per page by `fade`.
+/// • Dissolve (art): no travel. The LOWER of the two pages in view stays
+///   opaque underneath while the upper one fades — a true dissolve with no
+///   mid-fade brightness dip, and something is always behind the sidebar
+///   extension. Relies on pages being stacked in ascending order.
+/// Pure compositing (offset + alpha) — no layout per frame.
+private struct HeroPageLayer: ViewModifier, Animatable {
+    var position: CGFloat
+    let page: Int
+    let width: CGFloat
+    var rate: CGFloat = 0
+    var fade: CGFloat = 1
+    var dissolve = false
+
+    nonisolated var animatableData: CGFloat {
+        get { position }
+        set { position = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        let rel = CGFloat(page) - position
+        content
+            .offset(x: dissolve ? 0 : rel * width * rate)
+            .opacity(opacity(rel: rel))
+            .allowsHitTesting(abs(rel) < 0.5)
+    }
+
+    private func opacity(rel: CGFloat) -> CGFloat {
+        if dissolve {
+            return page == Int(floor(position)) ? 1 : max(0, 1 - abs(rel))
+        }
+        return max(0, 1 - abs(rel) * fade)
+    }
+}
+
+/// Horizontal scroll-wheel/trackpad handling for the hero. A local event
+/// monitor (not an NSView in the hierarchy) so SwiftUI hit-testing for the
+/// hero's buttons is untouched. A gesture locks to the axis of its first
+/// movement; horizontal gestures over the hero are consumed (Home's vertical
+/// scroll view never sees them), everything else passes straight through.
+@MainActor
+final class HeroWheelGesture {
+    struct Handlers {
+        var isInside: (CGPoint) -> Bool
+        var drag: (CGFloat) -> Void
+        var release: (CGFloat) -> Void
+        var step: (Int) -> Void
+    }
+
+    private var monitor: Any?
+    private var handlers: Handlers?
+    private enum Axis { case undecided, horizontal, vertical }
+    private var axis: Axis = .undecided
+    private var startedInside = false
+    private var consumeMomentum = false
+    private var velocity: CGFloat = 0
+    private var lastTimestamp: TimeInterval = 0
+    private var lastStep: TimeInterval = 0
+
+    func install(_ handlers: Handlers) {
+        remove()
+        self.handlers = handlers
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [self] event in
+            // Monitors run on the main thread; assumeIsolated's result must be
+            // Sendable, hence the Bool round-trip rather than returning the event.
+            let consumed = MainActor.assumeIsolated { handle(event) }
+            return consumed ? nil : event
+        }
+    }
+
+    func remove() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+        handlers = nil
+    }
+
+    /// Returns true when the event was consumed.
+    private func handle(_ e: NSEvent) -> Bool {
+        guard let h = handlers, let content = e.window?.contentView else { return false }
+        // SwiftUI's .global space is the window content view, y-down.
+        let p = e.locationInWindow
+        let inside = h.isInside(CGPoint(x: p.x, y: content.bounds.height - p.y))
+
+        // Legacy wheel (no gesture phases): each notch is a discrete page.
+        if e.phase.isEmpty && e.momentumPhase.isEmpty {
+            guard inside, abs(e.scrollingDeltaX) > abs(e.scrollingDeltaY), abs(e.scrollingDeltaX) >= 1 else { return false }
+            if e.timestamp - lastStep > 0.35 {
+                lastStep = e.timestamp
+                h.step(e.scrollingDeltaX < 0 ? 1 : -1)
+            }
+            return true
+        }
+
+        if !e.momentumPhase.isEmpty {
+            // We snap ourselves; swallow the system's momentum for our gesture.
+            return consumeMomentum
+        }
+
+        if e.phase.contains(.began) {
+            axis = .undecided
+            velocity = 0
+            startedInside = inside
+            consumeMomentum = false
+            lastTimestamp = e.timestamp
+            // Let the outer scroll view see began/ended pairs regardless.
+            return false
+        }
+
+        if e.phase.contains(.changed) {
+            guard startedInside else { return false }
+            if axis == .undecided {
+                let dx = abs(e.scrollingDeltaX), dy = abs(e.scrollingDeltaY)
+                guard dx + dy > 0 else { return false }
+                axis = dx > dy ? .horizontal : .vertical
+            }
+            guard axis == .horizontal else { return false }
+            let dt = max(e.timestamp - lastTimestamp, 1.0 / 240)
+            lastTimestamp = e.timestamp
+            // Points/s, sign flipped: content moves against the fingers.
+            let v = -e.scrollingDeltaX / dt
+            velocity = velocity * 0.5 + v * 0.5
+            h.drag(e.scrollingDeltaX)
+            return true
+        }
+
+        if e.phase.contains(.ended) || e.phase.contains(.cancelled) {
+            if axis == .horizontal {
+                consumeMomentum = true
+                h.release(velocity)
+            }
+            axis = .undecided
+            startedInside = false
+            return false
+        }
+        return false
     }
 }
 

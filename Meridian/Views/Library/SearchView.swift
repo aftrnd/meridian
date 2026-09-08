@@ -4,6 +4,9 @@ struct SearchView: View {
     @Environment(SteamLibraryStore.self) private var library
     @Environment(Launcher.self)      private var launcher
     @Binding var selectedGame: Game?
+    /// The search field lives in the shared toolbar; drop it while a game
+    /// detail is presented over this page (title is owned by ContentView).
+    @Environment(\.detailPresented) private var detailPresented
 
     @State private var searchText = ""
 
@@ -19,7 +22,7 @@ struct SearchView: View {
     }
 
     var body: some View {
-        Group {
+        let content = Group {
             if searchText.isEmpty {
                 promptView
             } else if searchResults.isEmpty {
@@ -28,8 +31,11 @@ struct SearchView: View {
                 resultsGrid
             }
         }
-        .navigationTitle("Search")
-        .searchable(text: $searchText, placement: .toolbar, prompt: "Search all games…")
+        if detailPresented {
+            content
+        } else {
+            content.searchable(text: $searchText, placement: .toolbar, prompt: "Search all games…")
+        }
     }
 
     private var promptView: some View {

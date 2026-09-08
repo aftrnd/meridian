@@ -20,7 +20,6 @@ struct SteamWebView: View {
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .padding(16)
         .ignoresSafeArea(edges: [.top, .bottom])
-        .navigationTitle("")
         .overlay(alignment: .topLeading) {
             if canGoBack {
                 Button { webViewStore.webView?.goBack() } label: {
