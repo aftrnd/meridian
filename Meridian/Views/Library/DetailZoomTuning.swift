@@ -10,12 +10,12 @@ import AppKit
 struct DetailZoomParameters: Codable, Equatable, Sendable {
     // Open. Curve mode = cubic Bézier (ease-in → ease-out, no bounce);
     // spring mode uses duration/bounce/kick.
-    var openUsesCurve: Bool   = true
+    var openUsesCurve: Bool   = false
     var openEaseIn: Double    = 0.8
     var openEaseOut: Double   = 0.35
-    var openDuration: Double  = 0.225
-    var openBounce: Double    = 0.189
-    var openKick: Double      = 5
+    var openDuration: Double  = 0.535
+    var openBounce: Double    = 0.125
+    var openKick: Double      = 12
 
     // Close spring
     var closeDuration: Double = 0.65
@@ -33,7 +33,7 @@ struct DetailZoomParameters: Codable, Equatable, Sendable {
     var clipRestInset: Double      = 200
 
     // Library recede
-    var rootFadeStart: Double = 0.656
+    var rootFadeStart: Double = 0
     var rootFadeEnd: Double   = 1
 
     // Card geometry
@@ -44,9 +44,9 @@ struct DetailZoomParameters: Codable, Equatable, Sendable {
     var fallbackPageFadeEnd: Double = 0.5
 
     // Hand-offs
-    var ambientFade: Double = 0.4
+    var ambientFade: Double = 2.25
     var chromeSwap: Double  = 0.611
-    var landingFade: Double = 0.6
+    var landingFade: Double = 0.25
 
     /// Swift literal of the current values, for pasting back as new defaults.
     var swiftLiteral: String {

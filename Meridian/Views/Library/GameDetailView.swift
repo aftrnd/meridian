@@ -127,6 +127,14 @@ struct GameDetailView: View {
                 }
                 .padding(.horizontal, inset)
                 .padding(.bottom, inset)
+                // The scroller (always-on with a mouse, overlay flash with a
+                // trackpad) would show while the page is still scaled inside
+                // the zoom rect. `.scrollIndicators` isn't re-applied once the
+                // NSScrollView exists, so drive the scroller's alpha directly:
+                // layout never changes, it fades in after the flight settles.
+                .background(alignment: .topLeading) {
+                    ScrollerVisibility(visible: showsAmbient).frame(width: 0, height: 0)
+                }
             }
         }
         .background { ambientBackdrop }
@@ -336,7 +344,56 @@ struct GameDetailView: View {
     /// Bleed fade once the zoom has landed (and out as a close begins).
     private static var ambientFade: Animation { .easeOut(duration: DetailZoomTuning.shared.params.ambientFade) }
 
-    // MARK: - Steam prompt copy
+    // MARK: - Scroller visibility
+
+/// Zero-size probe inside a `ScrollView`'s content: finds the enclosing
+/// `NSScrollView` and fades its scrollers (alpha, not presence — a legacy
+/// scroller takes layout space, so removing it would reflow the page).
+private struct ScrollerVisibility: NSViewRepresentable {
+    let visible: Bool
+
+    func makeNSView(context: Context) -> ScrollerProbe {
+        let v = ScrollerProbe()
+        v.visible = visible
+        return v
+    }
+
+    func updateNSView(_ v: ScrollerProbe, context: Context) {
+        v.visible = visible
+    }
+
+    final class ScrollerProbe: NSView {
+        var visible = true { didSet { if visible != oldValue { apply(animated: true) } } }
+
+        override var isFlipped: Bool { true }
+        // An AppKit subview sits above the hosting view's SwiftUI drawing in
+        // AppKit hit-testing regardless of SwiftUI z-order; never take events.
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            apply(animated: false)
+        }
+
+        private func apply(animated: Bool) {
+            guard let scrollView = enclosingScrollView else { return }
+            let scrollers = [scrollView.verticalScroller, scrollView.horizontalScroller].compactMap { $0 }
+            let alpha: CGFloat = visible ? 1 : 0
+            guard animated else {
+                scrollers.forEach { $0.alphaValue = alpha }
+                return
+            }
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.25
+                scrollers.forEach { $0.animator().alphaValue = alpha }
+            }
+            // Overlay style: announce the now-visible scroller as a fresh page would.
+            if visible { scrollView.flashScrollers() }
+        }
+    }
+}
+
+// MARK: - Steam prompt copy
 
     private var steamPromptTitle: String {
         switch launcher.steamPrompt {
@@ -369,12 +426,15 @@ struct GameDetailView: View {
         let w = contentWidth
         let h = bannerFrameHeight
 
-        // Color.black establishes the frame as a concrete view (not a Group),
+        // A concrete Color establishes the frame as a real view (not a Group),
         // which prevents the SwiftUI layout engine from implicitly clipping the
         // image to the frame's straight edges before clipShape rounds the corners.
         // The image lives entirely in .overlay so it overflows the layout frame
         // freely — the one and only clip boundary is the final clipShape below.
-        return Color.black
+        // Clear once the art is in: under the zoom's fractional scale the art's
+        // resampled edge blends with whatever is behind it, and an opaque black
+        // backing showed as a dark fringe around the banner mid-flight.
+        return (bannerImage == nil ? Color.black : Color.clear)
             .frame(width: w, height: h)
             .overlay {
                 if let img = bannerImage {
@@ -834,17 +894,12 @@ struct GameDetailView: View {
                 if storeTotal > 0 {
                     let progress = Double(unlocked.count) / Double(storeTotal)
                     VStack(alignment: .leading, spacing: 4) {
-                        // Same platform-view guard as the spinner (20 pt tall, measured).
-                        Color.clear
+                        // Pure SwiftUI (no NSProgressIndicator), so it can
+                        // stay mounted through the zoom and FILL once the
+                        // page has landed instead of fading in with the bleeds.
+                        AchievementProgressBar(value: progress, armed: showsAmbient)
                             .frame(maxWidth: .infinity)
                             .frame(height: 20)
-                            .overlay {
-                                if showsAmbient {
-                                    ProgressView(value: progress)
-                                        .progressViewStyle(.linear)
-                                        .tint(.accentColor)
-                                }
-                            }
                         Text(unlocked.count == 0
                              ? "None unlocked yet — keep playing!"
                              : "\(unlocked.count) of \(storeTotal) unlocked")
@@ -1695,6 +1750,43 @@ private struct CapsuleProgressBar: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(label)
         .accessibilityValue("\(Int(min(max(value, 0), 1) * 100)) percent")
+    }
+}
+
+/// Achievement completion. Sits at 0 while the page is in flight, then fills
+/// to `value` with a springy ease once `armed` (page landed) — the "counting
+/// up" feel of a stats screen rather than a static bar fading in. Later value
+/// changes (achievements arriving) animate the same way.
+private struct AchievementProgressBar: View {
+    let value: Double
+    let armed: Bool
+    @State private var shown: Double = 0
+
+    var body: some View {
+        GeometryReader { proxy in
+            let clamped = min(max(shown, 0), 1)
+            let h: CGFloat = 6
+            ZStack(alignment: .leading) {
+                Capsule().fill(.quaternary)
+                Capsule()
+                    .fill(Color.accentColor)
+                    .frame(width: clamped > 0 ? max(proxy.size.width * clamped, h) : 0)
+            }
+            .frame(height: h)
+            .frame(maxHeight: .infinity)
+        }
+        .onChange(of: armed, initial: true) { _, on in if on { fill() } }
+        .onChange(of: value) { _, _ in if armed { fill() } }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Achievement progress")
+        .accessibilityValue("\(Int(min(max(value, 0), 1) * 100)) percent")
+    }
+
+    private func fill() {
+        // Brief hold after landing, then a soft overshoot and settle.
+        withAnimation(.spring(duration: 0.9, bounce: 0.22).delay(0.15)) {
+            shown = value
+        }
     }
 }
 

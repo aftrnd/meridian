@@ -209,6 +209,10 @@ The update checker distinguishes them by the `-engine` suffix.
 | Metal HUD | Show GPU performance overlay |
 | Virtual Desktop | Force fixed-resolution Wine desktop |
 
+## Navigation
+
+Meridian keeps browser-style history: every page you visit (sidebar section, or a game opened on top of one) is an entry, and back/forward replay the same open/close zoom a click would. All the ways macOS delivers back/forward are honoured — mouse buttons 4/5 (e.g. MX Master thumb buttons), `⌘[` / `⌘]` (what Logi Options+ sends for its Back/Forward actions), and three-finger swipe. On the Steam Store/Profile web pages `⌘[` / `⌘]` stay with the web page.
+
 ## Known Limitations
 
 - **Anti-cheat**: EasyAntiCheat and BattlEye block Wine on macOS

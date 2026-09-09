@@ -22,6 +22,9 @@ struct GameGridView: View {
     var gameState: GameCardState = .idle
 
     @State private var isHovered = false
+    /// Set when hover resumes after a close landed on this card: the lift
+    /// eases back in instead of snapping. Cleared by the next pointer event.
+    @State private var hoverEasesIn = false
     @State private var runningPulse = false
     @State private var hoverLocation: CGPoint = .zero
     @State private var cardSize: CGSize = .zero
@@ -36,10 +39,17 @@ struct GameGridView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.detailFlightSource) private var flightSource
 
-    /// True while the detail-open ghost is departing from THIS card instance
-    /// (matched by frame, so a duplicate in another row stays visible).
-    private var isFlightSource: Bool {
-        guard let s = flightSource, s.gameID == game.id else { return false }
+    /// True while the detail zoom is departing from / returning to THIS card
+    /// instance (matched by frame, so a duplicate in another row stays
+    /// visible). Hover is suppressed for the whole flight, landing included.
+    private var isFlightSource: Bool { matches(flightSource) }
+
+    /// The art hides under the ghost until the close has settled; during the
+    /// landing crossfade it's shown again beneath the fading ghost.
+    private var hidesArt: Bool { isFlightSource && flightSource?.landing == false }
+
+    private func matches(_ s: DetailFlightSource?) -> Bool {
+        guard let s, s.gameID == game.id else { return false }
         return abs(s.artFrame.midX - artFrame.midX) < 2 && abs(s.artFrame.midY - artFrame.midY) < 2
     }
 
@@ -102,15 +112,17 @@ struct GameGridView: View {
             radius: isHovered ? 16 : 0,
             y: isHovered ? 8 : 0
         )
-        .animation(.easeOut(duration: 0.15), value: isHovered)
+        .animation(hoverEasesIn ? .easeInOut(duration: 0.4) : .easeOut(duration: 0.15), value: isHovered)
         .animation(.interactiveSpring(response: 0.15, dampingFraction: 0.7), value: hoverLocation)
         .contentShape(Rectangle())
         .onDisappear {
             isHovered = false
             hoverLocation = .zero
+            let wasSource = isFlightSource
             // Otherwise a scrolled-away card's stale frame could anchor a zoom
             // to a spot now occupied by a different card.
             DetailTransitionRegistry.shared.forgetCard(id: game.id, artFrame: artFrame)
+            if wasSource { DetailTransitionRegistry.shared.flightSourceMoved?() }
         }
         .onAppear { updatePulse() }
         .onChange(of: gameState) { _, _ in updatePulse() }
@@ -239,7 +251,7 @@ struct GameGridView: View {
         // source cell the same way); no-op at 1 so idle cards pay nothing.
         // Applied BEFORE the glow so the glow stays put under the departing
         // art instead of blinking out on click.
-        .opacity(isFlightSource ? 0 : 1)
+        .opacity(hidesArt ? 0 : 1)
         // Behind the clipped card so the blur bleeds past its edges onto the
         // background (added after clipShape → the glow itself is not clipped).
         .background { ArtGlowBackground(colors: glowColors) }
@@ -250,11 +262,16 @@ struct GameGridView: View {
         .onContinuousHover { phase in
             switch phase {
             case .active(let point):
+                // Hit testing is off for the flight's target side only, so
+                // moves still arrive mid-close — ignore them until landed.
+                guard !isFlightSource else { return }
+                hoverEasesIn = false
                 hoverLocation = point
                 isHovered = true
                 // Hover = click candidate — make this instance the flight anchor.
                 registerCard(hovered: true)
             case .ended:
+                hoverEasesIn = false
                 isHovered = false
                 hoverLocation = .zero
                 registerCard(hovered: false)
@@ -268,7 +285,7 @@ struct GameGridView: View {
         // Only recover to true — false is handled exclusively by onContinuousHover
         // .ended to avoid spurious clears from scroll view re-renders.
         .onHover { hovered in
-            guard hovered, !isHovered else { return }
+            guard hovered, !isHovered, !isFlightSource else { return }
             // Position to card center as a neutral default; onContinuousHover
             // .active will correct it to the actual cursor location on first move.
             hoverLocation = CGPoint(x: cardSize.width / 2, y: cardSize.height / 2)
@@ -279,20 +296,34 @@ struct GameGridView: View {
             // frame(in:) includes the card's own hover lift/tilt (verified), so
             // only take layout-scale readings; the registry adds the lift itself.
             guard !isHovered else { return }
+            let wasSource = isFlightSource
             cardSize = frame.size
             artFrame = frame
             registerCard(hovered: false)
+            // Scrolled out from under the returning art.
+            if wasSource, !isFlightSource { DetailTransitionRegistry.shared.flightSourceMoved?() }
         }
         // The ghost must be exactly what the card draws.
         .onChange(of: loadedImage) { _, _ in registerCard(hovered: isHovered) }
         // The art is lifting off (or landing): drop the hover state now. Hit
         // testing is off for the flight so `.ended` would never arrive, and a
         // stuck hover would re-appear tilted + highlighted when the art returns.
-        .onChange(of: isFlightSource) { _, active in
-            guard active, isHovered else { return }
-            isHovered = false
-            hoverLocation = .zero
-            registerCard(hovered: false)
+        // Once the landing crossfade ends, a pointer still over the art eases
+        // the hover back in (no event fires for a pointer that hasn't moved).
+        .onChange(of: flightSource) { old, new in
+            let wasSource = matches(old), isSource = matches(new)
+            if isSource, !wasSource {
+                guard isHovered else { return }
+                isHovered = false
+                hoverLocation = .zero
+                registerCard(hovered: false)
+            } else if wasSource, !isSource, old?.landing == true,
+                      let p = DetailTransitionRegistry.shared.pointer, artFrame.contains(p) {
+                hoverEasesIn = true
+                hoverLocation = CGPoint(x: p.x - artFrame.minX, y: p.y - artFrame.minY)
+                isHovered = true
+                registerCard(hovered: true)
+            }
         }
     }
 
