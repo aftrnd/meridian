@@ -54,6 +54,18 @@ final class DetailTransitionRegistry {
 
     private var cards: [Int: CardSource] = [:]
 
+    /// Last known pointer position in stage coordinates (nil = outside the
+    /// stage). Cards suppress hover for the whole flight, so no hover event
+    /// tells a card the (stationary) pointer is still over it once the close
+    /// has landed — it reads this instead.
+    var pointer: CGPoint?
+
+    /// Fired by the flight's source card when it scrolls away or is recycled
+    /// mid-close (the root is interactive from the close's first frame). The
+    /// stage cuts the return flight so no ghost/page stays pinned to the spot
+    /// the card used to occupy.
+    var flightSourceMoved: (() -> Void)?
+
     /// Hover re-records, so when a game appears in two rows the instance
     /// under the cursor (the one being clicked) wins.
     func recordCard(id: Int, artFrame: CGRect, isHovered: Bool, image: NSImage?) {
@@ -89,8 +101,8 @@ struct DetailZoom {
     /// reports, so it can recognise itself as the source and hide its art.
     let sourceLayoutFrame: CGRect?
 
-    var source: DetailFlightSource? {
-        sourceLayoutFrame.map { DetailFlightSource(gameID: gameID, artFrame: $0) }
+    func source(landing: Bool) -> DetailFlightSource? {
+        sourceLayoutFrame.map { DetailFlightSource(gameID: gameID, artFrame: $0, landing: landing) }
     }
 
     /// Rect at `progress` (0 = card, 1 = stage). Deliberately unclamped so
@@ -160,6 +172,9 @@ struct DetailZoom {
 struct DetailFlightSource: Equatable {
     let gameID: Int
     let artFrame: CGRect
+    /// True once a close has settled: the card shows its own art again (the
+    /// ghost is fading off it) but stays hover-free until the crossfade ends.
+    let landing: Bool
 }
 
 extension EnvironmentValues {

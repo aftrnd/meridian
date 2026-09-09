@@ -61,6 +61,24 @@ struct ContentView: View {
     @State private var stageSize: CGSize = .zero
     /// Bumped per flight so a stale completion/watchdog can't touch a newer one.
     @State private var zoomGeneration = 0
+    /// Bumped per OPEN only. Identity of the page + ghost layers, so an open
+    /// that interrupts a close gets fresh Animatable state and plays from the
+    /// card (progress 0) — not from wherever the close's presentation value
+    /// was. iOS does the same: the closing app is cut off, the new one opens
+    /// in full. The root can't be re-identified (it would remount Home), so
+    /// its fade simply continues from its current alpha.
+    @State private var openGeneration = 0
+
+    // Browser-style history (see the Navigation history section).
+    @State private var history: [NavEntry] = [NavEntry(destination: .home, game: nil)]
+    @State private var historyIndex = 0
+    /// True while back/forward applies an entry, so the resulting open/close/
+    /// sidebar change isn't recorded as a new visit.
+    @State private var applyingHistory = false
+    /// Sidebar change made by history replay; its (asynchronous) onChange
+    /// must not record it.
+    @State private var historyDestination: SidebarDestination?
+    @State private var navButtons = NavButtonMonitor()
 
     /// Friends panel width, derived from the frozen Home layout: the panel's
     /// leading edge lands exactly at the row's natural "3 full cards + the
@@ -180,7 +198,7 @@ struct ContentView: View {
             NavigationStack {
                 stage
                     .navigationTitle(stageTitle)
-                    .environment(\.detailFlightSource, landing ? nil : zoom?.source)
+                    .environment(\.detailFlightSource, zoom?.source(landing: landing))
                     .environment(\.detailPresented, detailChrome)
                     .toolbar {
                         // Root-page chrome only; the detail page brings its own
@@ -252,6 +270,16 @@ struct ContentView: View {
             }
             // Dismiss game detail when changing sections — matches standard master–detail behaviour.
             resetDetailTransition()
+            if historyDestination == newValue {
+                historyDestination = nil
+            } else {
+                recordVisit(destination: newValue, game: nil)
+            }
+        }
+        .onAppear {
+            DetailTransitionRegistry.shared.flightSourceMoved = { cutReturnFlight() }
+            navButtons.onBack = { goBack() }
+            navButtons.onForward = { goForward() }
         }
     }
 
@@ -290,17 +318,27 @@ struct ContentView: View {
                     // sit at progress 0 until the watchdog forced it.
                     .onAppear { DispatchQueue.main.async { beginPendingOpen() } }
                     .id(game.id)
-                    // Outside `.id` so its animated progress carries across a
-                    // game swap instead of restarting.
+                    // Outside `.id(game.id)` so a same-game close → open
+                    // retargets in place; inside `.id(openGeneration)` so a
+                    // fresh open never inherits a running close.
                     .modifier(DetailZoomReveal(progress: zoomProgress, zoom: zoom, stageSize: stageSize))
                     // Likewise usable as soon as the open starts (target 1).
                     .allowsHitTesting(zoomProgress == 1)
+                    .id(openGeneration)
             }
 
             DetailZoomGhost(zoom: zoom, progress: zoomProgress, stageSize: stageSize, opacity: ghostOpacity)
+                .id(openGeneration)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onGeometryChange(for: CGSize.self) { $0.size } action: { stageSize = $0 }
+        // Plain registry write — never invalidates a view.
+        .onContinuousHover(coordinateSpace: .local) { phase in
+            switch phase {
+            case .active(let p): DetailTransitionRegistry.shared.pointer = p
+            case .ended:         DetailTransitionRegistry.shared.pointer = nil
+            }
+        }
     }
 
     /// One title owner for the whole stage. Root and detail are mounted
@@ -407,13 +445,13 @@ extension ContentView {
     /// (with its art as the ghost if it's loaded), else a centred inset of
     /// the stage with no ghost — the page just scales up and fades in (hero
     /// button, downloads popover).
-    private func makeZoom(for game: Game) -> DetailZoom {
+    private func makeZoom(for game: Game, resting: Bool = false) -> DetailZoom {
         let stage = CGRect(origin: .zero, size: stageSize)
         if let card = DetailTransitionRegistry.shared.card(for: game.id),
            card.artFrame.width > 0, card.artFrame.intersects(stage) {
             let poster = DetailZoom.posterImage(for: game, card: card)
             return DetailZoom(gameID: game.id,
-                              cardRect: card.visualArtFrame,
+                              cardRect: resting ? card.artFrame : card.visualArtFrame,
                               poster: poster,
                               sourceLayoutFrame: poster == nil ? nil : card.artFrame)
         }
@@ -433,6 +471,7 @@ extension ContentView {
     /// the flight via `beginPendingOpen`. Never waits on a running close —
     /// that one is finalised on the spot and the new open begins at once.
     private func openDetail(_ game: Game) {
+        recordVisit(destination: sidebarDestination, game: game)
         if selectedGame != nil {
             if isClosing {
                 var t = Transaction()
@@ -456,6 +495,7 @@ extension ContentView {
         var t = Transaction()
         t.disablesAnimations = true
         withTransaction(t) {
+            openGeneration += 1
             landing = false
             ghostOpacity = 1
             zoomProgress = 0
@@ -487,6 +527,7 @@ extension ContentView {
     /// card shows its own art and the ghost fades off it (landing crossfade).
     private func closeDetail() {
         guard let game = selectedGame, !isClosing else { return }
+        recordVisit(destination: sidebarDestination, game: nil)
         zoomGeneration += 1
         let generation = zoomGeneration
         pendingOpen = false
@@ -494,10 +535,12 @@ extension ContentView {
         ghostOpacity = 1
 
         // At progress ≈ 1 every zoom renders the full stage, so swapping in
-        // the return zoom (fresh card frame, current hover state) is invisible.
+        // the return zoom (fresh card frame) is invisible. The card drops its
+        // hover lift the moment it becomes the flight source, so the art must
+        // land on the RESTING frame — hover eases back in after the landing.
         var t = Transaction()
         t.disablesAnimations = true
-        withTransaction(t) { zoom = makeZoom(for: game) }
+        withTransaction(t) { zoom = makeZoom(for: game, resting: true) }
         withAnimation(chromeSwap) { detailChrome = false }
 
         withAnimation(closeZoom, completionCriteria: .removed) {
@@ -543,6 +586,23 @@ extension ContentView {
         }
     }
 
+    /// The card the art is returning to scrolled away (or was recycled) while
+    /// the close was still settling/landing. Finish on the spot — the card is
+    /// already showing its own art wherever it went; nothing may stay pinned
+    /// to the spot it left. Never touches an open (target 1) or a pending one.
+    private func cutReturnFlight() {
+        guard zoom != nil, zoomProgress == 0, !pendingOpen else { return }
+        zoomGeneration += 1
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) {
+            zoom = nil
+            landing = false
+            ghostOpacity = 1
+            selectedGame = nil
+        }
+    }
+
     /// Safety net: if an animation completion ever fails to fire, force the
     /// zoom to whichever resting state it was heading for so the UI can never
     /// be locked mid-flight. Generation-guarded so a later flight is never
@@ -565,6 +625,141 @@ extension ContentView {
                 if !opening { selectedGame = nil }
             }
         }
+    }
+}
+
+extension ContentView {
+
+    // MARK: - Navigation history (browser-style back / forward)
+    //
+    // Every place the user can be — a sidebar page, or a game open on top of
+    // one — is a history entry. Back/forward (mouse buttons 4/5, as Safari
+    // and Finder honour them) walk the list and replay the SAME open/close
+    // zooms a click would, so navigation never skips or fakes a motion.
+
+    struct NavEntry {
+        var destination: SidebarDestination
+        var game: Game?
+
+        func sameState(as other: NavEntry) -> Bool {
+            destination == other.destination && game?.id == other.game?.id
+        }
+    }
+
+    /// Called from every user-initiated navigation. Truncates the forward
+    /// list like a browser; no-op while replaying history or for a repeat.
+    private func recordVisit(destination: SidebarDestination, game: Game?) {
+        guard !applyingHistory else { return }
+        let entry = NavEntry(destination: destination, game: game)
+        if history[historyIndex].sameState(as: entry) { return }
+        history.removeSubrange((historyIndex + 1)...)
+        history.append(entry)
+        historyIndex = history.count - 1
+    }
+
+    private func goBack() {
+        guard historyIndex > 0 else { return }
+        historyIndex -= 1
+        apply(history[historyIndex])
+    }
+
+    private func goForward() {
+        guard historyIndex < history.count - 1 else { return }
+        historyIndex += 1
+        apply(history[historyIndex])
+    }
+
+    private func apply(_ entry: NavEntry) {
+        if entry.destination != sidebarDestination {
+            historyDestination = entry.destination
+            sidebarDestination = entry.destination
+            if let game = entry.game {
+                // Next pass: the new root has laid out and registered its
+                // cards, so the zoom anchors to the game's card there (or
+                // falls back to the centred zoom) — never to a frame left
+                // behind by the page that was just swapped out.
+                DispatchQueue.main.async {
+                    applyingHistory = true
+                    openDetail(game)
+                    applyingHistory = false
+                }
+            }
+            return
+        }
+        applyingHistory = true
+        defer { applyingHistory = false }
+        if let game = entry.game {
+            openDetail(game)
+        } else {
+            closeDetail()
+        }
+    }
+}
+
+/// Mouse back/forward, every way macOS delivers it: raw buttons 4/5 (plain
+/// mice, MX Master without Logi software), ⌘[ / ⌘] (what Logi Options+ and
+/// other mouse drivers send for their "Back/Forward" actions — the Safari /
+/// Finder shortcuts), and legacy swipe gestures. Local monitor: fires only
+/// for events this app receives, and only for the main window so a utility
+/// window (Zoom Tuning, Settings) never drives the stage. Web pages keep
+/// their own ⌘[ / ⌘] (WebKit is first responder → passed through).
+@MainActor
+final class NavButtonMonitor {
+    var onBack: (() -> Void)?
+    var onForward: (() -> Void)?
+    // Only touched in init/deinit (both effectively main-thread here).
+    nonisolated(unsafe) private var token: Any?
+    private let log = MeridianLog(category: "NavButtonMonitor")
+
+    private enum Direction { case back, forward }
+
+    init() {
+        token = NSEvent.addLocalMonitorForEvents(matching: [.otherMouseUp, .keyDown, .swipe]) { [weak self] event in
+            guard event.window?.isMainWindow == true,
+                  let direction = Self.direction(of: event) else { return event }
+            let typeRaw = event.type.rawValue
+            // Local monitors run on the main thread.
+            let consumed = MainActor.assumeIsolated { () -> Bool in
+                guard let self else { return false }
+                self.log.info("Navigation \(direction == .back ? "back" : "forward") via event type \(typeRaw)")
+                switch direction {
+                case .back:    self.onBack?()
+                case .forward: self.onForward?()
+                }
+                return true
+            }
+            return consumed ? nil : event
+        }
+    }
+
+    private nonisolated static func direction(of event: NSEvent) -> Direction? {
+        switch event.type {
+        case .otherMouseUp:
+            switch event.buttonNumber {
+            case 3: return .back
+            case 4: return .forward
+            default: return nil
+            }
+        case .keyDown:
+            guard event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+                  let responder = event.window?.firstResponder,
+                  !String(describing: type(of: responder)).hasPrefix("WK") else { return nil }
+            switch event.charactersIgnoringModifiers {
+            case "[": return .back
+            case "]": return .forward
+            default:  return nil
+            }
+        case .swipe:
+            if event.deltaX > 0 { return .back }
+            if event.deltaX < 0 { return .forward }
+            return nil
+        default:
+            return nil
+        }
+    }
+
+    deinit {
+        if let token { NSEvent.removeMonitor(token) }
     }
 }
 
