@@ -69,6 +69,10 @@ struct GameDetailView: View {
     /// Online — reflecting the constraint up-front instead of prompting
     /// after the fact (HANDOFF-2026-07-03-v6 Goal 1).
     @State private var steamStubRequiresOnline = false
+    /// Flips as the open zoom is landing (timed from mount, not from the
+    /// spring's `.removed` settle, which trails the visible motion by a good
+    /// half second) so the achievements bar starts filling as the page arrives.
+    @State private var achievementBarArmed = false
     /// The chevron segment's launch-mode popover (the "teardrop" window —
     /// same presentation as the Meridian Verified badge popover).
     @State private var showLaunchModePopover = false
@@ -138,6 +142,13 @@ struct GameDetailView: View {
             }
         }
         .background { ambientBackdrop }
+        .task {
+            // ~2/3 through the open flight: the rect has all but reached the
+            // stage, the fill's ease-in overlaps the last of the landing.
+            let lead = DetailZoomTuning.shared.params.openDuration * 0.65
+            try? await Task.sleep(for: .seconds(lead))
+            achievementBarArmed = true
+        }
         .animation(Self.ambientFade, value: showsAmbient)
         // Title is set by ContentView's stage (shared with the root page).
         // The native back button is replaced with an identical toolbar button
@@ -897,7 +908,7 @@ private struct ScrollerVisibility: NSViewRepresentable {
                         // Pure SwiftUI (no NSProgressIndicator), so it can
                         // stay mounted through the zoom and FILL once the
                         // page has landed instead of fading in with the bleeds.
-                        AchievementProgressBar(value: progress, armed: showsAmbient)
+                        AchievementProgressBar(value: progress, armed: achievementBarArmed)
                             .frame(maxWidth: .infinity)
                             .frame(height: 20)
                         Text(unlocked.count == 0
@@ -1783,8 +1794,7 @@ private struct AchievementProgressBar: View {
     }
 
     private func fill() {
-        // Brief hold after landing, then a soft overshoot and settle.
-        withAnimation(.spring(duration: 0.9, bounce: 0.22).delay(0.15)) {
+        withAnimation(.spring(duration: 0.9, bounce: 0.22)) {
             shown = value
         }
     }
