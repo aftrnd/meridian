@@ -14,6 +14,11 @@
 #   MoltenVK    Khronos release (Apache-2.0)                           build-deps.sh
 #   DXMT        3Shain/dxmt release (MIT)                              fetched here
 #   DXVK d3d9, Vulkan-Loader, KosmicKrisp (zlib, Apache-2.0, MIT)       build-d3d9.sh
+#   DepotDownloader  Meridian's fork (GPL-2.0), from source every time  build-depotdownloader.sh
+#
+# licenses/ holds the license texts of the main components and README.txt,
+# which names the public source: the scripts and patches tagged in
+# $ENGINE_REPO, and the release's source archive (publish-engine.sh).
 #
 # Renderer selection (no closed renderer switch):
 #   Wine searches its own lib/wine before any WINEDLLPATH entry, so a DLL that
@@ -43,7 +48,8 @@ WINE_INSTALL="$WORK/wine-install"
 ARCHIVE="$BUILD_ROOT/meridian-engine-arm64.tar.gz"
 DXMT_VERSION="v0.80"
 DXMT_URL="https://github.com/3Shain/dxmt/releases/download/${DXMT_VERSION}/dxmt-${DXMT_VERSION}-builtin.tar.gz"
-INSTALLED_ENGINE="$HOME/Library/Application Support/com.meridian.app/engine"
+# The release tarball has no license file (v0.80); the text comes from the same tag.
+DXMT_LICENSE_URL="https://raw.githubusercontent.com/3Shain/dxmt/${DXMT_VERSION}/LICENSE"
 
 # The D3D front-ends Meridian switches between per launch. d3d12 moves too:
 # while it sits in lib/wine nothing on WINEDLLPATH can ever replace it.
@@ -87,8 +93,9 @@ stage_wine() {
 
 stage_dxmt() {
     say "Staging DXMT $DXMT_VERSION"
-    local tar="$DL/dxmt-${DXMT_VERSION}-builtin.tar.gz"
+    local tar="$DL/dxmt-${DXMT_VERSION}-builtin.tar.gz" lic="$DL/dxmt-${DXMT_VERSION}-LICENSE"
     [ -f "$tar" ] || curl -fsSL -o "$tar" "$DXMT_URL"
+    [ -f "$lic" ] || curl -fsSL -o "$lic" "$DXMT_LICENSE_URL"
     local src="$WORK/dxmt/$DXMT_VERSION"
     rm -rf "$WORK/dxmt"; mkdir -p "$WORK/dxmt"; tar -C "$WORK/dxmt" -xzf "$tar"
 
@@ -218,17 +225,12 @@ stage_meridian_tools() {
     bash "$SCRIPTS/build-dpapi.sh" "$W/share/meridian/meridian-dpapi.exe"
     bash "$SCRIPTS/build-wine-accessory.sh" "$W/share/meridian/meridian-wine-accessory.dylib"
 
+    # Meridian's fork (GPL-2.0), built from the upstream commit and patch the
+    # source archive carries, with its license notices. Never a copy of some
+    # other binary: its source couldn't be offered.
     local dd="$STAGE/tools/depotdownloader/DepotDownloader"
     mkdir -p "$(dirname "$dd")"
-    if command -v dotnet >/dev/null; then
-        bash "$SCRIPTS/build-depotdownloader.sh" "$dd"
-    elif [ -x "$INSTALLED_ENGINE/tools/depotdownloader/DepotDownloader" ]; then
-        # Meridian's own fork (GPL-2.0); reuse the previously built binary.
-        printf '\033[1;33m    dotnet not installed: reusing DepotDownloader from the installed engine\033[0m\n'
-        cp "$INSTALLED_ENGINE/tools/depotdownloader/DepotDownloader" "$dd"
-    else
-        die "DepotDownloader: install dotnet (brew install dotnet) to build it"
-    fi
+    bash "$SCRIPTS/build-depotdownloader.sh" "$dd" "$STAGE/licenses/depotdownloader"
 }
 
 # MARK: - Signing
@@ -299,40 +301,153 @@ build_prefix_template() {
     [ -f "$tpl/drive_c/windows/syswow64/d3d9.dll" ] || die "prefix template missing the 32-bit d3d9.dll placeholder"
     echo "    template: $dlls DLLs, $services services"
 
+    scrub_template "$tpl"
     rm -rf "$tpl/dosdevices"; mkdir -p "$tpl/dosdevices" "$tpl/drive_c/windows/syswow64"
     cp -R "$tpl" "$STAGE/prefix-template"
 }
 
+# wineboot records the Mac it runs on in the prefix, and the template ships
+# to every player. Wine writes each of these again on the player's Mac:
+# - drive_c/users/steamuser/{Documents,Music,Pictures,Videos,Downloads} are
+#   absolute links into the packager's home folder (broken links everywhere
+#   else). shell32 links a missing one into the running user's home when a
+#   program asks for it with CSIDL_FLAG_CREATE (_SHCreateSymbolicLink,
+#   shellpath.c). Desktop/My Mac Desktop doesn't come back: shell32 makes it
+#   only for a missing Desktop folder, and the template has one.
+# - Wine's own fonts (share/wine/fonts) are listed as external fonts by their
+#   path in the build folder. win32u deletes and rewrites those values at
+#   every session start (update_external_font_keys, font.c).
+# - The host name: ComputerName, Tcpip's Hostname and Domain, and USERDOMAIN
+#   and LOGONSERVER in Volatile Environment. Every session starts with
+#   wineboot --init (run_wineboot, ntdll's unix/env.c), which writes them
+#   before the first program runs (create_computer_name_keys and
+#   create_volatile_environment_registry_key, wineboot.c).
+# - The GPU and the displays: the GPU's name, and each display's EDID with
+#   its serial number. A session's first display query finds no
+#   HARDWARE\DEVICEMAP\VIDEO (a volatile key), asks the Mac driver, and
+#   prepare_devices (win32u's sysparams.c) empties these keys before it adds
+#   the player's own.
+scrub_template() {
+    local tpl="$1" reg
+    find "$tpl/drive_c/users" -type l -delete
+    for reg in "$tpl"/*.reg; do
+        BUILD_PATH="$(reg_path "$BUILD_ROOT")" awk "$SCRUBBED_ENTRIES" "$reg" > "$reg.new"
+        mv "$reg.new" "$reg"
+    done
+}
+
+# The registry entries scrub_template drops: device keys whole, the other
+# entries value by value (a value spans the lines that end in a backslash).
+# Key paths are compared in lower case, with / for the .reg file's \\.
+SCRUBBED_ENTRIES='
+/^\[/ {
+    key = tolower($0); sub(/^\[/, "", key); sub(/\]( [0-9]+)?$/, "", key); gsub(/\\\\/, "/", key)
+    device = key ~ /^system\/controlset001\/(enum\/(display|pci)|control\/class\/[{]4d36e96[8e]-e325-11ce-bfc1-08002be10318[}])\//
+    cont = 0
+}
+device { next }
+cont { cont = /\\$/; if (!drop) print; next }
+/^["@]/ {
+    name = tolower($0); sub(/=.*/, "", name)
+    drop = index($0, ENVIRON["BUILD_PATH"]) \
+        || (key == "system/controlset001/control/computername/computername" && name == "\"computername\"") \
+        || (key == "system/controlset001/services/tcpip/parameters" && (name == "\"hostname\"" || name == "\"domain\"")) \
+        || (key == "volatile environment" && (name == "\"userdomain\"" || name == "\"logonserver\""))
+    cont = /\\$/
+    if (!drop) print
+    next
+}
+{ print }
+'
+
+# A Unix path as a .reg file stores it: Z:\\Users\\name (backslashes doubled).
+reg_path() { printf 'Z:%s' "$1" | sed 's|/|\\\\|g'; }
+
 # MARK: - Licenses
+
+# One license text into licenses/. A text an upstream has moved stops the
+# package: the engine never ships without it.
+license() {
+    [ -f "$2" ] || die "license text missing: $2"
+    cp "$2" "$STAGE/licenses/$1"
+}
 
 stage_licenses() {
     say "Staging license texts"
-    local d="$STAGE/licenses"
-    mkdir -p "$d"
-    cp "$SRC/wine/COPYING.LIB" "$d/wine-LGPL-2.1.txt"
-    cp "$SRC/wine/LICENSE"     "$d/wine-LICENSE.txt"
+    local d="$STAGE/licenses" nettle glib lib f
+    nettle="$(unpacked "$NETTLE_URL")"
+    glib="$(unpacked "$GLIB_URL")"
+    mkdir -p "$d/wine-libs"
+    license wine-LGPL-2.1.txt               "$SRC/wine/COPYING.LIB"
+    license wine-LICENSE.txt                "$SRC/wine/LICENSE"
+    # The libraries Wine builds into its own modules (libs/: FAudio, libpng, ...).
+    for lib in "$SRC"/wine/libs/*/; do
+        for f in "$lib"COPYING* "$lib"COPYRIGHT* "$lib"LICEN[CS]E*; do
+            if [ -f "$f" ]; then cp "$f" "$d/wine-libs/$(basename "$lib")-$(basename "$f")"; fi
+        done
+    done
+    license dxmt-LICENSE.txt                "$DL/dxmt-${DXMT_VERSION}-LICENSE"
+    license moltenvk-LICENSE.txt            "$WORK/MoltenVK/LICENSE"
     cp "$D3D9_INSTALL"/licenses/* "$d/"
+    license gnutls-LICENSE.txt              "$SRC/gnutls/gnutls/LICENSE"
+    license gnutls-LGPL-2.1.txt             "$SRC/gnutls/gnutls/doc/COPYING.LESSER"
+    license gnutls-GPL-3.0.txt              "$SRC/gnutls/gnutls/doc/COPYING"
+    license nettle-LGPL-3.0.txt             "$nettle/COPYING.LESSERv3"
+    license nettle-GPL-3.0.txt              "$nettle/COPYINGv3"
+    license nettle-GPL-2.0.txt              "$nettle/COPYINGv2"
+    license gmp-LGPL-3.0.txt                "$SRC/gnutls/gmp/COPYING.LESSERv3"
+    license gmp-GPL-3.0.txt                 "$SRC/gnutls/gmp/COPYINGv3"
+    license gmp-GPL-2.0.txt                 "$SRC/gnutls/gmp/COPYINGv2"
+    license freetype-LICENSE.txt            "$SRC/freetype/LICENSE.TXT"
+    license freetype-FTL.txt                "$SRC/freetype/docs/FTL.TXT"
+    license sdl2-LICENSE.txt                "$(unpacked "$SDL2_URL")/LICENSE.txt"
+    license glib-LGPL-2.1.txt               "$glib/COPYING"
+    license glib-proxy-libintl-COPYING.txt  "$glib/subprojects/proxy-libintl/COPYING"
+    license glib-libffi-LICENSE.txt         "$glib/subprojects/libffi/LICENSE"
+    license glib-pcre2-LICENCE.txt          "$glib"/subprojects/pcre2-*/LICENCE
+    license gstreamer-LGPL-2.1.txt          "$SRC/gstreamer/LICENSE"
+    [ -f "$d/depotdownloader/NOTICES.txt" ] || die "DepotDownloader's notices are missing (stage_meridian_tools)"
+
     cat > "$d/README.txt" <<EOF
-Meridian engine $TAG — third-party components
+Meridian engine $TAG: third-party components
 
 Wine 11.0 (source ${WINE_SOURCE_VERSION} as published by CodeWeavers)  LGPL-2.1
   Source: ${WINE_SOURCE_URL}
-  Meridian's changes: Scripts/engine/patches/wine/ in the Meridian repository
-DXMT ${DXMT_VERSION}                                MIT        https://github.com/3Shain/dxmt
+  Meridian's changes: Scripts/engine/patches/wine/
+  Libraries Wine builds into its modules: wine-libs/
+DXMT ${DXMT_VERSION}                                         MIT        https://github.com/3Shain/dxmt
 MoltenVK 1.4.2                                     Apache-2.0 https://github.com/KhronosGroup/MoltenVK
 DXVK (d3d9; Meridian's patches/dxvk applied)       zlib       https://github.com/doitsujin/dxvk
 Vulkan-Loader                                      Apache-2.0 https://github.com/KhronosGroup/Vulkan-Loader
 Mesa KosmicKrisp                                   MIT        https://gitlab.freedesktop.org/mesa/mesa
   Revisions: $(cat "$D3D9_INSTALL/versions.txt")
-GnuTLS, nettle, GMP                                LGPL       https://gnutls.org
+GnuTLS                                             LGPL-2.1+  https://gnutls.org
+  With its bundled libtasn1 (LGPL-2.1+) and libunistring (LGPL-3.0+ or GPL-2.0+)
+GMP                                                LGPL-3.0+ or GPL-2.0+  https://gmplib.org
 FreeType                                           FTL        https://freetype.org
+GStreamer                                          LGPL-2.1   https://gstreamer.freedesktop.org
+  GnuTLS, GMP, FreeType and GStreamer are built from the copies in the
+  CrossOver source above (${WINE_SOURCE_URL##*/}).
+nettle                                             LGPL-3.0+ or GPL-2.0+  https://www.lysator.liu.se/~nisse/nettle/
+  Source: ${NETTLE_URL}
 SDL2                                               zlib       https://libsdl.org
-GLib, GStreamer                                    LGPL-2.1   https://gstreamer.freedesktop.org
+  Source: ${SDL2_URL}
+GLib                                               LGPL-2.1+  https://gitlab.gnome.org/GNOME/glib
+  Source: ${GLIB_URL}
+  Built with proxy-libintl (LGPL-2.0), libffi (MIT) and PCRE2 (BSD)
 DepotDownloader (Meridian fork)                    GPL-2.0    https://github.com/SteamRE/DepotDownloader
+  Its .NET runtime and NuGet packages: depotdownloader/NOTICES.txt
 
-Wine is built from the cited source with Meridian's patches applied; the
-other LGPL components are unmodified. All are dynamically loaded. Build
-scripts and patches are in the Meridian repository under Scripts/engine/.
+Wine is built from the cited source with Meridian's patches applied, and
+DepotDownloader with Meridian's patch. The LGPL libraries in wine/lib64 are
+built unmodified from the sources named above and loaded dynamically.
+
+Source
+  Build scripts and patches:
+    https://github.com/${ENGINE_REPO}/tree/$TAG/Scripts/engine
+  The source of the LGPL and GPL components, as built:
+    $(source_zip_name "$TAG"), attached to
+    https://github.com/${ENGINE_REPO}/releases/tag/$TAG
 EOF
 }
 
@@ -361,11 +476,35 @@ validate() {
         | grep $'^\t' | grep -c "$BUILD_ROOT" || true)
     [ "$leaks" -eq 0 ] || die "$leaks library references still point into $BUILD_ROOT"
     ! find "$STAGE" -name 'cxcompatdb*' -o -name 'D3DMetal*' | grep -q . || die "closed-source component in stage"
+
+    # The tarball is public: nothing in it may name the packager's home
+    # folder (a compiled-in path, a registry value), point a link outside the
+    # engine, or keep a registry value in the build folder.
+    leaks=$(grep -rlF -e "$HOME" -e "$(reg_path "$HOME")" "$STAGE" | head -5 || true)
+    [ -z "$leaks" ] || die "the engine names $HOME (BUILD_ROOT must be outside it):"$'\n'"$leaks"
+    leaks=$(find "$STAGE" -type l -lname '/*' | head -5 || true)
+    [ -z "$leaks" ] || die "absolute symlinks in the engine:"$'\n'"$leaks"
+    leaks=$(grep -lF "$(reg_path "$BUILD_ROOT")" "$STAGE"/prefix-template/*.reg || true)
+    [ -z "$leaks" ] || die "registry values still point into $BUILD_ROOT:"$'\n'"$leaks"
+
+    # Nor may the prefix template name this Mac (scrub_template): its user
+    # name, its short host name or the 15-character computer name Wine makes
+    # of it, in any case, in a text file (the registry, .ini, .inf) or a
+    # file's name, or keep a display's EDID. The binaries are Wine's build
+    # output, which the $HOME check covers; a name search there finds the
+    # authors' names in shell32's About box.
+    local tpl="$STAGE/prefix-template" host user
+    host="$(hostname -s)"; user="$(id -un)"
+    leaks=$( { grep -rliwIF -e "$user" -e "$host" -e "${host:0:15}" "$tpl"
+               find "$tpl" -iname "$user" -o -iname "*${host:0:15}*"; } | head -5 || true)
+    [ -z "$leaks" ] || die "the prefix template names this Mac (user or host name):"$'\n'"$leaks"
+    ! grep -qi '^"EDID"=' "$tpl/system.reg" || die "the prefix template keeps a display's EDID"
 }
 
 main() {
     [ -x "$WINE_INSTALL/bin/wine" ] || die "run build-wine.sh first"
     [ -f "$D3D9_INSTALL/versions.txt" ] || die "run build-d3d9.sh first"
+    command -v dotnet >/dev/null || die "brew install dotnet: DepotDownloader is built from source for every engine"
     stage_wine
     stage_dxmt
     stage_d3d9

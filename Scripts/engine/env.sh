@@ -11,7 +11,21 @@
 
 set -euo pipefail
 
-: "${BUILD_ROOT:=$HOME/meridian-engine-build}"   # outside Dropbox: large, churny
+say()  { printf '\033[1;34m==> %s\033[0m\n' "$*"; }
+die()  { printf '\033[1;31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
+
+# The build's own paths ship in the engine: Wine's modules keep their source
+# paths, and GLib and GStreamer look under $DEPS for GIO modules, GStreamer
+# plugins and gst-install-plugins-helper. So the folder is
+# - outside Dropbox (large, churny);
+# - outside $HOME, which would name the packager (package-engine.sh's
+#   validate refuses that);
+# - one only an administrator can make on a player's Mac: /opt belongs to
+#   root, while in a folder any account can write, such as /Users/Shared,
+#   another account could put code where those paths point.
+# It is made once with sudo and owned by whoever builds.
+: "${BUILD_ROOT:=/opt/meridian-engine-build}"
+[ -d "$BUILD_ROOT" ] || die "$BUILD_ROOT is missing. Make it once: sudo install -d -o $(id -un) $BUILD_ROOT"
 export BUILD_ROOT
 export SRC="$BUILD_ROOT/sources"                  # unpacked Wine source tarball
 export DL="$BUILD_ROOT/downloads"
@@ -22,6 +36,16 @@ export STAGE="$BUILD_ROOT/stage"                  # assembled engine (becomes en
 # Wine 11.0 with its publisher's patches (LGPL), as published by CodeWeavers.
 export WINE_SOURCE_VERSION="26.3.0"
 export WINE_SOURCE_URL="https://media.codeweavers.com/pub/crossover/source/crossover-sources-${WINE_SOURCE_VERSION}.tar.gz"
+
+# Upstream source tarballs build-deps.sh builds from. publish-engine.sh puts
+# the LGPL ones in each release's source archive.
+export NETTLE_URL="https://ftp.gnu.org/gnu/nettle/nettle-3.10.2.tar.gz"
+export SDL2_URL="https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-2.32.10.tar.gz"
+export GLIB_URL="https://download.gnome.org/sources/glib/2.82/glib-2.82.5.tar.xz"
+
+# The public repository: engine releases and the scripts and patches they
+# are built from. Installed copies of Meridian download engines from it.
+export ENGINE_REPO="aftrnd/meridian"
 
 export MACOSX_DEPLOYMENT_TARGET="15.0"            # matches the app's minimum
 export ARCH_FLAGS="-arch x86_64 -mmacosx-version-min=${MACOSX_DEPLOYMENT_TARGET}"
@@ -82,8 +106,14 @@ endian = 'little'
 EOF
 }
 
-say()  { printf '\033[1;34m==> %s\033[0m\n' "$*"; }
-die()  { printf '\033[1;31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
+# The directory an upstream tarball unpacks to in $WORK (fetch_tar in
+# build-deps.sh): its name without the .tar.* suffix.
+unpacked() { local name="${1##*/}"; echo "$WORK/${name%.tar.*}"; }
+
+# The release asset with an engine's corresponding source. Never .tar.gz or
+# .tar.xz: the app installs the first asset with either suffix as the engine
+# (AppUpdateChecker, EngineDownloader).
+source_zip_name() { echo "meridian-engine-$1-source.zip"; }
 
 # Rosetta can run x86_64 binaries, so configure-time run tests work and
 # needs_exe_wrapper stays false.

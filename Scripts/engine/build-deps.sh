@@ -15,11 +15,17 @@ source "$(dirname "$0")/env.sh"
 STAMPS="$WORK/stamps"
 mkdir -p "$DL" "$WORK" "$DEPS" "$STAMPS"
 
+# Unpacks the whole tarball whenever sources/wine is missing, which is how
+# publish-engine.sh gets a Wine source no earlier build has patched.
 fetch_wine_sources() {
     [ -d "$SRC/wine" ] && return
     local tarball="$DL/$(basename "$WINE_SOURCE_URL")"
-    say "Fetching Wine source ${WINE_SOURCE_VERSION}"
-    curl -fL -o "$tarball" "$WINE_SOURCE_URL"
+    if [ ! -f "$tarball" ]; then
+        say "Fetching Wine source ${WINE_SOURCE_VERSION}"
+        curl -fL -o "$tarball.part" "$WINE_SOURCE_URL"
+        mv "$tarball.part" "$tarball"
+    fi
+    say "Unpacking Wine source ${WINE_SOURCE_VERSION}"
     tar -C "$BUILD_ROOT" -xzf "$tarball"
 }
 
@@ -62,7 +68,7 @@ build_gmp() {
 build_nettle() {
     # The source tarball ships nettle without Makefile.in; use the GNU release
     # of the same 3.10 line.
-    local src; src="$(fetch_tar https://ftp.gnu.org/gnu/nettle/nettle-3.10.2.tar.gz)"
+    local src; src="$(fetch_tar "$NETTLE_URL")"
     autotools "$src" --enable-shared --disable-static --enable-fat \
         --disable-documentation --disable-openssl
 }
@@ -82,7 +88,7 @@ build_freetype() {
 }
 
 build_sdl2() {
-    local src; src="$(fetch_tar https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-2.32.10.tar.gz)"
+    local src; src="$(fetch_tar "$SDL2_URL")"
     local bdir="$WORK/build-sdl2"
     rm -rf "$bdir"
     cmake -S "$src" -B "$bdir" -G Ninja -DCMAKE_BUILD_TYPE=Release \
@@ -94,8 +100,11 @@ build_sdl2() {
 build_moltenvk() {
     # Upstream Khronos release (Apache-2.0). The macOS dylib is universal; keep
     # only the x86_64 slice. Vulkan headers come from the same tarball.
-    local tar="$DL/MoltenVK-macos-1.4.2.tar"
-    [ -f "$tar" ] || curl -fsSL -o "$tar" https://github.com/KhronosGroup/MoltenVK/releases/download/v1.4.2/MoltenVK-macos.tar
+    # The download is named after the version it's fetched for, so changing
+    # one changes the other.
+    local version="1.4.2"
+    local tar="$DL/MoltenVK-macos-$version.tar"
+    [ -f "$tar" ] || curl -fsSL -o "$tar" "https://github.com/KhronosGroup/MoltenVK/releases/download/v$version/MoltenVK-macos.tar"
     rm -rf "$WORK/MoltenVK"; tar -C "$WORK" -xf "$tar"
     local dylib
     dylib="$(find "$WORK/MoltenVK" -name libMoltenVK.dylib -path '*dynamic*' | head -1)"
@@ -113,7 +122,7 @@ build_glib() {
     # gdbus-codegen needs Python's removed distutils. Upstream 2.82 has
     # neither problem and satisfies GStreamer 1.24 (>= 2.64). libffi, pcre2
     # and libintl come from glib's own meson wraps.
-    local src; src="$(fetch_tar https://download.gnome.org/sources/glib/2.82/glib-2.82.5.tar.xz)"
+    local src; src="$(fetch_tar "$GLIB_URL")"
     meson_build "$src" -Dtests=false -Dinstalled_tests=false -Dnls=disabled \
         -Dintrospection=disabled -Dlibmount=disabled -Dselinux=disabled -Dxattr=false \
         -Dsysprof=disabled -Ddtrace=disabled -Dlibelf=disabled -Dman-pages=disabled \
@@ -157,6 +166,8 @@ main() {
     local pkgs=("$@"); [ ${#pkgs[@]} -gt 0 ] || pkgs=("${ALL[@]}")
     for p in "${pkgs[@]}"; do
         if [ -f "$STAMPS/$p" ] && [ $# -eq 0 ]; then say "$p: already built"; continue; fi
+        # $DEPS changes: publish-engine.sh's record of its inputs no longer holds.
+        rm -f "$STAMPS/deps.inputs"
         say "Building $p"
         "build_$p"
         touch "$STAMPS/$p"

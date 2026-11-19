@@ -39,6 +39,9 @@ apply_patches() {
 
 main() {
     [ -f "$DEPS/lib/libgnutls.30.dylib" ] || die "run build-deps.sh first"
+    # The source and the install change: publish-engine.sh's record of the
+    # inputs they were built from no longer holds.
+    rm -f "$WORK/stamps/wine.inputs"
     command -v x86_64-w64-mingw32-gcc >/dev/null || die "brew install mingw-w64"
     command -v i686-w64-mingw32-gcc   >/dev/null || die "brew install mingw-w64"
 

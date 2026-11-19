@@ -65,6 +65,7 @@ build_dxvk() {
     git -C "$src" submodule -q update --init --recursive --depth 1
     local p
     for p in "$PATCHES"/*.patch; do
+        [ -e "$p" ] || continue
         if git -C "$src" apply -R --check "$p" 2>/dev/null; then continue; fi
         say "Applying $(basename "$p")"
         git -C "$src" apply "$p" || die "patch failed: $p"
@@ -156,6 +157,9 @@ PY
 main() {
     command -v glslangValidator >/dev/null || die "brew install glslang"
     command -v "$(brew --prefix llvm)/bin/llvm-config" >/dev/null || die "brew install llvm libclc spirv-llvm-translator spirv-tools"
+    # The checkouts and the output change: publish-engine.sh's record of the
+    # inputs they were built from no longer holds.
+    rm -f "$WORK/stamps/d3d9.inputs"
     rm -rf "$OUT"; mkdir -p "$OUT"
     build_dxvk
     build_loader
