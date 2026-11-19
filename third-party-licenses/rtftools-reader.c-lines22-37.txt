@@ -1,0 +1,16 @@
+/*
+ * Derived from RTF Tools by Paul DuBois (dubois@primate.wisc.edu)
+ * Homepage: http://www.snake.net/software/RTF/
+ * Original license follows:
+ */
+
+/*
+ * reader.c - RTF file reader.  Release 1.10.
+ *
+ * ....
+ *
+ * Author: Paul DuBois	dubois@primate.wisc.edu
+ *
+ * This software may be redistributed without restriction and used for
+ * any purpose whatsoever.
+ */

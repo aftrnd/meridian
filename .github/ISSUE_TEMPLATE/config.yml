@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Purchase, license, refund or privacy question
+    url: https://meridian.nejack.com/support
+    about: Contact support privately. Don't post license keys or email addresses in issues.
+  - name: Security problem
+    url: https://github.com/aftrnd/meridian/security/advisories/new
+    about: Report it privately, never in a public issue.

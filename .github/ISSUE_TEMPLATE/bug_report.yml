@@ -1,0 +1,71 @@
+name: Bug report
+description: A game or a part of Meridian doesn't work as it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Issues are public. **Never post a license key or an email address** here, yours or anyone else's.
+        Questions about a purchase, a license or a refund go to support at https://meridian.nejack.com/support instead.
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      description: Apple menu › About This Mac.
+      placeholder: macOS 26.1
+    validations:
+      required: true
+  - type: input
+    id: mac
+    attributes:
+      label: Mac model
+      description: Apple menu › About This Mac. Include the chip and the memory.
+      placeholder: MacBook Pro 14-inch (2023), M3 Pro, 18 GB
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Meridian and engine versions
+      description: Meridian › Settings › Updates shows both.
+      placeholder: Meridian 0.13.0, engine 4.3.2
+    validations:
+      required: true
+  - type: input
+    id: game
+    attributes:
+      label: Game and Steam AppID
+      description: The AppID is the number in the game's Steam store link (store.steampowered.com/app/AppID). Write "none" if the problem isn't with a game.
+      placeholder: Noita, 881100
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1.
+        2.
+        3.
+  - type: checkboxes
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: |
+        Choose **Collect Diagnostics** in the game's ··· menu, or in Meridian › Settings › Developer. The zip can contain Steam names, so don't attach it here: email it to meridian@nejack.com with this issue's number.
+      options:
+        - label: I emailed the diagnostics zip, or I explained above why I couldn't collect one.
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Before you submit
+      options:
+        - label: This issue contains no license key and no email address.
+          required: true

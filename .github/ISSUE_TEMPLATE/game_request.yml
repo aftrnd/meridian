@@ -1,0 +1,33 @@
+name: Game request
+description: A game you own is Untested in Meridian or needs a fix.
+labels: ["game request"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Issues are public. **Never post a license key or an email address** here, yours or anyone else's.
+  - type: input
+    id: game
+    attributes:
+      label: Game and Steam store link
+      placeholder: Noita, https://store.steampowered.com/app/881100
+    validations:
+      required: true
+  - type: textarea
+    id: what-happens
+    attributes:
+      label: What happens now
+      description: Its rating in Meridian, and what happens when you play it, if you tried.
+  - type: input
+    id: setup
+    attributes:
+      label: Mac, macOS and Meridian versions
+      description: Apple menu › About This Mac, and Meridian › Settings › Updates.
+      placeholder: MacBook Pro 14-inch (2023), M3 Pro, 18 GB; macOS 26.1; Meridian 0.13.0, engine 4.3.2
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Before you submit
+      options:
+        - label: This issue contains no license key and no email address.
+          required: true
