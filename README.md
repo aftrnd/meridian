@@ -17,7 +17,7 @@ The Meridian app's own source code is not in this repository, and this repositor
 Open a [new issue](https://github.com/aftrnd/meridian/issues/new/choose) and pick **Bug report** or **Game request**. Issues are public, so:
 
 - **Never post a license key or an email address** in an issue or a comment, yours or anyone else's.
-- Don't attach the diagnostics zip. It can contain Steam names, so email it to meridian@nejack.com with the issue number.
+- Don't attach the diagnostics zip. It can contain Steam names, so email it to support@nejack.com with the issue number.
 
 Questions about a purchase, a license, a refund or privacy go to support at https://meridian.nejack.com/support, not to an issue. To report a security problem, see [SECURITY.md](SECURITY.md).
 

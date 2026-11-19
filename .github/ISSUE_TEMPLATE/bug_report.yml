@@ -59,7 +59,7 @@ body:
     attributes:
       label: Diagnostics
       description: |
-        Choose **Collect Diagnostics** in the game's ··· menu, or in Meridian › Settings › Developer. The zip can contain Steam names, so don't attach it here: email it to meridian@nejack.com with this issue's number.
+        Choose **Collect Diagnostics** in the game's ··· menu, or in Meridian › Settings › Developer. The zip can contain Steam names, so don't attach it here: email it to support@nejack.com with this issue's number.
       options:
         - label: I emailed the diagnostics zip, or I explained above why I couldn't collect one.
   - type: checkboxes

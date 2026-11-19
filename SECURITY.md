@@ -3,7 +3,7 @@
 Please report security problems privately, never in a public issue.
 
 - **On GitHub:** use **Report a vulnerability** on this repository's [Security tab](https://github.com/aftrnd/meridian/security/advisories/new).
-- **By email:** meridian@nejack.com
+- **By email:** support@nejack.com
 
 This covers Meridian (the app and its engine), the build scripts in this repository, https://meridian.nejack.com and the license service behind it.
 
