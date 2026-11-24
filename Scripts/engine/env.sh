@@ -110,6 +110,34 @@ EOF
 # build-deps.sh): its name without the .tar.* suffix.
 unpacked() { local name="${1##*/}"; echo "$WORK/${name%.tar.*}"; }
 
+# A git checkout of $1 at revision $3 in $2, fetched shallow when it's a commit.
+checkout() {
+    local repo="$1" dir="$2" rev="$3"
+    if [ ! -d "$dir/.git" ]; then
+        git init -q "$dir"
+        git -C "$dir" remote add origin "$repo"
+    fi
+    local have want
+    have="$(git -C "$dir" rev-parse -q --verify HEAD 2>/dev/null || true)"
+    want="$(git -C "$dir" rev-parse -q --verify "$rev^{commit}" 2>/dev/null || true)"
+    if [ -z "$have" ] || [ "$have" != "$want" ]; then
+        git -C "$dir" fetch -q --depth 1 origin "$rev"
+        git -C "$dir" checkout -q -f FETCH_HEAD
+    fi
+}
+
+# Applies <dir>'s patches to the git checkout <src>. Idempotent: a patch that
+# already reverse-applies is in the tree from an earlier run.
+apply_git_patches() {
+    local src="$1" dir="$2" p
+    for p in "$dir"/*.patch; do
+        [ -e "$p" ] || continue
+        if git -C "$src" apply -R --check "$p" 2>/dev/null; then continue; fi
+        say "Applying $(basename "$p")"
+        git -C "$src" apply "$p" || die "patch failed: $p"
+    done
+}
+
 # The release asset with an engine's corresponding source. Never .tar.gz or
 # .tar.xz: the app installs the first asset with either suffix as the engine
 # (AppUpdateChecker, EngineDownloader).

@@ -13,6 +13,8 @@
 #   3. HTTPS through WinHTTP  (GnuTLS chain Steam networking depends on)
 #   4. D3D9 drawing a sampled texture: wined3d, and on macOS 26+ DXVK through
 #      the Vulkan loader and KosmicKrisp (64- and 32-bit), with a read-back
+#   5. A program in a Steam library runs from the engine's game bundle, and
+#      macOS takes it for a game (what Game Mode needs)
 
 source "$(dirname "$0")/../env.sh"
 
@@ -42,15 +44,22 @@ FAILED=0
 # run <renderer-dir> <exe> <expect-regex>...  (every regex must match; RUN_ENV
 # adds variables for one run)
 RUN_ENV=()
-run() {
-    local dir="$1" exe="$2" out re ok=1
-    shift 2
-    out=$(cd "$P" && env -i HOME="$HOME" PATH=/usr/bin:/bin WINEPREFIX="$P" WINEDEBUG=-all \
+# wine_output <renderer-dir> <wine argument>...: what the program prints.
+wine_output() {
+    local dir="$1"
+    shift
+    (cd "$P" && env -i HOME="$HOME" PATH=/usr/bin:/bin WINEPREFIX="$P" WINEDEBUG=-all \
         WINEMSYNC=1 MVK_CONFIG_LOG_LEVEL=0 \
         WINEDLLPATH="$W/lib/$dir:$W/lib/wined3d:$W/lib/wine" \
         WINEDLLOVERRIDES="d3d11=n,b;dxgi=n,b;d3d10core=n,b;mscoree,mshtml=" \
         ${RUN_ENV[@]+"${RUN_ENV[@]}"} \
-        "$TIMEOUT" 90 "$W/bin/wine64" "Z:$OUT/$exe" 2>&1) || true
+        "$TIMEOUT" 90 "$W/bin/wine64" "$@" 2>&1) || true
+}
+
+run() {
+    local dir="$1" exe="$2" out re ok=1
+    shift 2
+    out=$(wine_output "$dir" "Z:$OUT/$exe")
     for re in "$@"; do grep -qE "$re" <<<"$out" || ok=0; done
     if [ "$ok" -eq 1 ]; then
         printf '  \033[1;32mPASS\033[0m %-9s %s\n' "$dir" "$exe"
@@ -80,6 +89,36 @@ if [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 26 ]; then
     run dxvk d3d9probe32.exe 'Radeon' 'RESULT PASS'
     RUN_ENV=()
 fi
+
+# A game is a program in a Steam library that another Windows program starts,
+# as Steam does: the loader puts a copy of itself in the game bundle for it
+# (patch 0013), and gamepolicyd, which decides on Game Mode, lists the process.
+# A copy, not a link: gamepolicyd finds the bundle from the kernel's path for
+# the executable, which for a hard link is whichever name was looked up last.
+game_bundle() {
+    # A second library's layout, with nothing in the path for cmd to quote.
+    local game="$P/drive_c/SteamLibrary/steamapps/common/SmokeGame"
+    local loader="$W/lib/wine/x86_64-unix/wine"
+    local copy="$W/lib/wine/x86_64-unix/Meridian Game.app/Contents/MacOS/smokegame.exe" out seen="" own=no
+    mkdir -p "$game"; cp "$OUT/presentprobe64.exe" "$game/smokegame.exe"; rm -f "$copy"
+    out=$(wine_output dxmt cmd /c 'C:\SteamLibrary\steamapps\common\SmokeGame\smokegame.exe')
+    # gamepolicyd's lines reach the log store a moment after the program ends.
+    sleep 2
+    seen=$(/usr/bin/log show --last 2m --info --predicate \
+        'process == "gamepolicyd" AND eventMessage CONTAINS "Games added" AND eventMessage CONTAINS "smokegame.exe"' 2>/dev/null \
+        | grep -c 'LSSupportsGameMode' || true)
+    # The game's executable: a file of its own, with the loader's bytes.
+    if [ -f "$copy" ] && ! [ "$copy" -ef "$loader" ] && cmp -s "$copy" "$loader"; then own=yes; fi
+    if grep -q 'presented 60/60 frames' <<<"$out" && [ "$own" = yes ] && [ "$seen" -ge 1 ]; then
+        printf '  \033[1;32mPASS\033[0m %-9s %s\n' game smokegame.exe
+    else
+        printf '  \033[1;31mFAIL\033[0m %-9s %s (its own copy of the loader in the bundle: %s, gamepolicyd lines: %s)\n%s\n' game smokegame.exe \
+            "$own" "$seen" "$out"
+        FAILED=1
+    fi
+    rm -f "$copy"
+}
+game_bundle
 
 env WINEPREFIX="$P" "$W/bin/wineserver" -k 2>/dev/null || true
 [ "$FAILED" -eq 0 ] || die "smoke test failed"

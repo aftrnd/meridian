@@ -1,0 +1,25 @@
+From 75bd4da5d19057df0659ba9d38395b85ba7cbbeb Mon Sep 17 00:00:00 2001
+From: Feifan He <feifan@codeweavers.com>
+Date: Thu, 25 Jun 2026 17:52:49 +0800
+Subject: [PATCH] chore(util): add a missing header
+
+Signed-off-by: Feifan He <feifan@codeweavers.com>
+---
+ src/util/com/com_guid.cpp | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/util/com/com_guid.cpp b/src/util/com/com_guid.cpp
+index 11bf4a7..05bda6c 100644
+--- a/src/util/com/com_guid.cpp
++++ b/src/util/com/com_guid.cpp
+@@ -8,6 +8,7 @@
+  * See <https://github.com/doitsujin/dxvk/blob/master/LICENSE>
+  */
+ 
++#include <iomanip>
+ #include <mutex>
+ #include <unordered_set>
+ 
+-- 
+2.54.0 (Apple Git-157)
+

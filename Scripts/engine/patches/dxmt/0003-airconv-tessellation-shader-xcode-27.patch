@@ -1,0 +1,30 @@
+From 06065754af91352caaf8db87d4566fecc4124552 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Pawe=C5=82=20Ko=C5=82odziejski?= <aquadran@gmail.com>
+Date: Sat, 13 Jun 2026 10:02:50 +0200
+Subject: [PATCH] fix(airconv): fix compile metal shader with toolchain from
+ XCode 27 beta 1
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Signed-off-by: Paweł Kołodziejski <aquadran@gmail.com>
+---
+ src/airconv/shaders/air_tessellation.metal | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/airconv/shaders/air_tessellation.metal b/src/airconv/shaders/air_tessellation.metal
+index 56ba86e..e6705d8 100644
+--- a/src/airconv/shaders/air_tessellation.metal
++++ b/src/airconv/shaders/air_tessellation.metal
+@@ -150,7 +150,7 @@ struct TessMeshWorkload {
+ 
+ int
+ get_next_index(threadgroup int *out_count) {
+-  return __metal_atomic_fetch_add_explicit(out_count, 1, int(memory_order_relaxed), __METAL_MEMORY_SCOPE_THREADGROUP__);
++  return atomic_fetch_add_explicit(reinterpret_cast<threadgroup atomic_int *>(out_count), 1, memory_order_relaxed);
+ }
+ 
+ template <partitioning partition>
+-- 
+2.54.0 (Apple Git-157)
+

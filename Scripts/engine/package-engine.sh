@@ -3,7 +3,7 @@
 # package-engine.sh — assemble the Meridian engine tarball from source-built parts.
 #
 # Usage: bash Scripts/engine/package-engine.sh <vX.Y.Z-engine>
-#   Requires build-deps.sh and build-wine.sh to have run.
+#   Requires build-deps.sh, build-wine.sh, build-dxmt.sh and build-d3d9.sh to have run.
 #   Produces $BUILD_ROOT/meridian-engine-arm64.tar.gz (the asset EngineDownloader
 #   installs into ~/Library/Application Support/com.meridian.app/engine/).
 #   Publishing is a separate step: Scripts/engine/publish-engine.sh.
@@ -12,7 +12,7 @@
 #   Wine        published LGPL-2.1 source + Meridian's patches       build-wine.sh
 #   libraries   GnuTLS, nettle, gmp, freetype, SDL2, GLib, GStreamer   build-deps.sh
 #   MoltenVK    Khronos release (Apache-2.0)                           build-deps.sh
-#   DXMT        3Shain/dxmt release (MIT)                              fetched here
+#   DXMT        3Shain/dxmt (MIT) + Meridian's patches, with LLVM 15    build-dxmt.sh
 #   DXVK d3d9, Vulkan-Loader, KosmicKrisp (zlib, Apache-2.0, MIT)       build-d3d9.sh
 #   DepotDownloader  Meridian's fork (GPL-2.0), from source every time  build-depotdownloader.sh
 #
@@ -35,6 +35,9 @@
 #   goes through lib64/libvulkan.1.dylib (WINE_VULKAN_LIBRARY, patch 0009),
 #   which loads KosmicKrisp from lib64/kosmickrisp_icd.json (VK_DRIVER_FILES).
 #
+# Game Mode: lib/wine/x86_64-unix/Meridian Game.app is the bundle games run
+# from (stage_game_bundle; Wine patch 0013).
+#
 # Not shipped: Apple D3DMetal (GPTK license), cxcompatdb.so (closed source),
 # the gbe_fork Steamworks emulator, and any Valve binary.
 
@@ -46,15 +49,12 @@ TAG="${1:-}"
 SCRIPTS="$(cd "$(dirname "$0")/.." && pwd)"
 WINE_INSTALL="$WORK/wine-install"
 ARCHIVE="$BUILD_ROOT/meridian-engine-arm64.tar.gz"
-DXMT_VERSION="v0.80"
-DXMT_URL="https://github.com/3Shain/dxmt/releases/download/${DXMT_VERSION}/dxmt-${DXMT_VERSION}-builtin.tar.gz"
-# The release tarball has no license file (v0.80); the text comes from the same tag.
-DXMT_LICENSE_URL="https://raw.githubusercontent.com/3Shain/dxmt/${DXMT_VERSION}/LICENSE"
-
 # The D3D front-ends Meridian switches between per launch. d3d12 moves too:
 # while it sits in lib/wine nothing on WINEDLLPATH can ever replace it.
 SWITCHED_DLLS=(d3d9 d3d11 dxgi d3d10core d3d12 d3d12core)
+DXMT_INSTALL="$WORK/dxmt-install"
 D3D9_INSTALL="$WORK/d3d9-install"
+GAME_BUNDLE="Meridian Game.app"    # the name patch 0013 looks for beside the loader
 
 W="$STAGE/wine"
 
@@ -92,14 +92,8 @@ stage_wine() {
 # MARK: - DXMT
 
 stage_dxmt() {
-    say "Staging DXMT $DXMT_VERSION"
-    local tar="$DL/dxmt-${DXMT_VERSION}-builtin.tar.gz" lic="$DL/dxmt-${DXMT_VERSION}-LICENSE"
-    [ -f "$tar" ] || curl -fsSL -o "$tar" "$DXMT_URL"
-    [ -f "$lic" ] || curl -fsSL -o "$lic" "$DXMT_LICENSE_URL"
-    local src="$WORK/dxmt/$DXMT_VERSION"
-    rm -rf "$WORK/dxmt"; mkdir -p "$WORK/dxmt"; tar -C "$WORK/dxmt" -xzf "$tar"
-
-    local arch dll
+    say "Staging DXMT"
+    local src="$DXMT_INSTALL" arch dll
     for arch in x86_64-windows i386-windows; do
         mkdir -p "$W/lib/dxmt/$arch"
         for dll in "$src/$arch"/*.dll; do
@@ -110,7 +104,7 @@ stage_dxmt() {
         done
     done
     cp "$src/x86_64-unix/winemetal.so" "$W/lib/wine/x86_64-unix/"
-    echo "DXMT $DXMT_VERSION" > "$W/meridian-dxmt-version.txt"
+    cp "$src/meridian-dxmt-version.txt" "$W/"
 }
 
 # MARK: - D3D9
@@ -263,6 +257,22 @@ EOF
     codesign --force --sign - "$W/bin/wineserver"
 }
 
+# MARK: - Game bundle
+
+# macOS gives Game Mode to a process whose executable is inside an app bundle
+# that says it is a game, so games run from this one (patch 0013 puts a copy
+# of the loader in it for every executable in a Steam library). The loader's
+# signature covers its embedded Info.plist, and run from inside a bundle it
+# must find the same bytes in Contents/Info.plist: the file is that section,
+# taken out of the loader. The loader opens ntdll.so beside itself.
+stage_game_bundle() {
+    say "Staging the game bundle"
+    local unix="$W/lib/wine/x86_64-unix"
+    mkdir -p "$unix/$GAME_BUNDLE/Contents/MacOS"
+    segedit "$unix/wine" -extract __TEXT __info_plist "$unix/$GAME_BUNDLE/Contents/Info.plist"
+    ln -s ../../../ntdll.so "$unix/$GAME_BUNDLE/Contents/MacOS/ntdll.so"
+}
+
 # MARK: - Prefix template
 
 engine_env() {
@@ -315,8 +325,11 @@ build_prefix_template() {
 #   shellpath.c). Desktop/My Mac Desktop doesn't come back: shell32 makes it
 #   only for a missing Desktop folder, and the template has one.
 # - Wine's own fonts (share/wine/fonts) are listed as external fonts by their
-#   path in the build folder. win32u deletes and rewrites those values at
-#   every session start (update_external_font_keys, font.c).
+#   path in the build folder, and so are fonts the packager installed for
+#   their own account, by their path in the home folder (four Adobe fonts,
+#   Nov 24 2026). win32u drops a listed font this Mac doesn't have and lists
+#   the ones it has at every session start (update_external_font_keys,
+#   font.c).
 # - The host name: ComputerName, Tcpip's Hostname and Domain, and USERDOMAIN
 #   and LOGONSERVER in Volatile Environment. Every session starts with
 #   wineboot --init (run_wineboot, ntdll's unix/env.c), which writes them
@@ -331,7 +344,8 @@ scrub_template() {
     local tpl="$1" reg
     find "$tpl/drive_c/users" -type l -delete
     for reg in "$tpl"/*.reg; do
-        BUILD_PATH="$(reg_path "$BUILD_ROOT")" awk "$SCRUBBED_ENTRIES" "$reg" > "$reg.new"
+        BUILD_PATH="$(reg_path "$BUILD_ROOT")" HOME_PATH="$(reg_path "$HOME")" \
+            awk "$SCRUBBED_ENTRIES" "$reg" > "$reg.new"
         mv "$reg.new" "$reg"
     done
 }
@@ -349,7 +363,7 @@ device { next }
 cont { cont = /\\$/; if (!drop) print; next }
 /^["@]/ {
     name = tolower($0); sub(/=.*/, "", name)
-    drop = index($0, ENVIRON["BUILD_PATH"]) \
+    drop = index($0, ENVIRON["BUILD_PATH"]) || index($0, ENVIRON["HOME_PATH"]) \
         || (key == "system/controlset001/control/computername/computername" && name == "\"computername\"") \
         || (key == "system/controlset001/services/tcpip/parameters" && (name == "\"hostname\"" || name == "\"domain\"")) \
         || (key == "volatile environment" && (name == "\"userdomain\"" || name == "\"logonserver\""))
@@ -386,7 +400,7 @@ stage_licenses() {
             if [ -f "$f" ]; then cp "$f" "$d/wine-libs/$(basename "$lib")-$(basename "$f")"; fi
         done
     done
-    license dxmt-LICENSE.txt                "$DL/dxmt-${DXMT_VERSION}-LICENSE"
+    cp "$DXMT_INSTALL"/licenses/* "$d/"
     license moltenvk-LICENSE.txt            "$WORK/MoltenVK/LICENSE"
     cp "$D3D9_INSTALL"/licenses/* "$d/"
     license gnutls-LICENSE.txt              "$SRC/gnutls/gnutls/LICENSE"
@@ -415,7 +429,9 @@ Wine 11.0 (source ${WINE_SOURCE_VERSION} as published by CodeWeavers)  LGPL-2.1
   Source: ${WINE_SOURCE_URL}
   Meridian's changes: Scripts/engine/patches/wine/
   Libraries Wine builds into its modules: wine-libs/
-DXMT ${DXMT_VERSION}                                         MIT        https://github.com/3Shain/dxmt
+DXMT (Meridian's patches/dxmt applied)             MIT        https://github.com/3Shain/dxmt
+LLVM (built into DXMT's winemetal.so)              Apache-2.0 with LLVM exceptions  https://llvm.org
+  Revisions: $(cat "$DXMT_INSTALL/versions.txt")
 MoltenVK 1.4.2                                     Apache-2.0 https://github.com/KhronosGroup/MoltenVK
 DXVK (d3d9; Meridian's patches/dxvk applied)       zlib       https://github.com/doitsujin/dxvk
 Vulkan-Loader                                      Apache-2.0 https://github.com/KhronosGroup/Vulkan-Loader
@@ -467,6 +483,14 @@ validate() {
              lib64/libgnutls.30.dylib lib64/libMoltenVK.dylib lib64/libfreetype.6.dylib; do
         [ -e "$W/$f" ] || die "missing wine/$f"
     done
+    local game="$W/lib/wine/x86_64-unix/$GAME_BUNDLE/Contents"
+    [ "$(plutil -extract LSApplicationCategoryType raw "$game/Info.plist")" = public.app-category.games ] \
+        && [ "$(plutil -extract GCSupportsGameMode raw "$game/Info.plist")" = true ] \
+        || die "the game bundle's Info.plist doesn't say it is a game (patch 0013)"
+    # With a name in it, the Dock would call every game by that name.
+    ! plutil -extract CFBundleName raw "$game/Info.plist" >/dev/null 2>&1 \
+        || die "the game bundle's Info.plist has a CFBundleName"
+    [ "$game/MacOS/ntdll.so" -ef "$W/lib/wine/x86_64-unix/ntdll.so" ] || die "the game bundle's ntdll.so link is broken"
     for f in "${SWITCHED_DLLS[@]}"; do
         [ ! -e "$W/lib/wine/x86_64-windows/$f.dll" ] || die "$f.dll still in lib/wine (would shadow WINEDLLPATH)"
     done
@@ -503,6 +527,7 @@ validate() {
 
 main() {
     [ -x "$WINE_INSTALL/bin/wine" ] || die "run build-wine.sh first"
+    [ -f "$DXMT_INSTALL/versions.txt" ] || die "run build-dxmt.sh first"
     [ -f "$D3D9_INSTALL/versions.txt" ] || die "run build-d3d9.sh first"
     command -v dotnet >/dev/null || die "brew install dotnet: DepotDownloader is built from source for every engine"
     stage_wine
@@ -511,6 +536,7 @@ main() {
     stage_libraries
     stage_meridian_tools
     sign_loader
+    stage_game_bundle
     echo "$TAG" > "$W/meridian-engine-version.txt"
     build_prefix_template
     stage_licenses

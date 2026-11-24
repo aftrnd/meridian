@@ -12,23 +12,24 @@
 #
 #   1. build-deps.sh      x86_64 libraries
 #   2. build-wine.sh      Wine from its published LGPL source
-#   3. build-d3d9.sh      DXVK d3d9, Vulkan loader, KosmicKrisp (D3D9 → Metal)
-#   4. package-engine.sh  stage, relink, sign, prefix template, tarball
-#   5. smoke/smoke-test.sh  DXMT, wined3d and DXVK (32/64-bit) and HTTPS, headless
-#   6. public repo        PUBLIC_PATHS of this commit, committed and tagged vX.Y.Z-engine
-#   7. source archive     meridian-engine-vX.Y.Z-engine-source.zip: that tag, and the
+#   3. build-dxmt.sh      DXMT with Meridian's patches, and its LLVM (D3D10/11 → Metal)
+#   4. build-d3d9.sh      DXVK d3d9, Vulkan loader, KosmicKrisp (D3D9 → Metal)
+#   5. package-engine.sh  stage, relink, sign, prefix template, tarball
+#   6. smoke/smoke-test.sh  DXMT, wined3d and DXVK (32/64-bit) and HTTPS, headless
+#   7. public repo        PUBLIC_PATHS of this commit, committed and tagged vX.Y.Z-engine
+#   8. source archive     meridian-engine-vX.Y.Z-engine-source.zip: that tag, and the
 #                         upstream source of the LGPL and GPL components and of
 #                         what DepotDownloader bundles (make_source_zip)
-#   8. gh release create  from that tag, both files attached, not marked Latest
+#   9. gh release create  from that tag, both files attached, not marked Latest
 #
-# Steps 1 to 5 build a commit, never the working tree, which must be clean
+# Steps 1 to 6 build a commit, never the working tree, which must be clean
 # (see Build). Uploading also needs a clone of $ENGINE_REPO at
 # $PUBLIC_CHECKOUT (made on first use). PUBLIC_PATHS there mirror this
 # repository: a file under them that this repository doesn't track is
 # deleted by the next publish, so license files for those folders are
 # committed here too.
 #
-# Prerequisites: Xcode command line tools, and
+# Prerequisites: Xcode with its Metal toolchain (build-dxmt.sh), and
 #   brew install meson ninja cmake bison flex autoconf automake libtool mingw-w64 coreutils gh dotnet pkgconf \
 #                glslang llvm libclc spirv-llvm-translator spirv-tools
 
@@ -107,20 +108,24 @@ preflight() {
 # Scripts/, exported into $SNAPSHOT with git archive, so nothing else in the
 # tree (an ignored file, an edit saved during hours of building) reaches it.
 #
-# The three long builds keep their output between runs, and each output has
+# The four long builds keep their output between runs, and each output has
 # a record, $WORK/stamps/<output>.inputs: the git object, at the commit that
 # built it, of every path it is built from (a folder's object is its tree,
 # which changes when any file in it is added, changed or removed):
 #   deps  env.sh, build-deps.sh
 #   wine  those, build-wine.sh, patches/wine
-#   d3d9  those, build-d3d9.sh, patches/dxvk
-# Wine and the D3D9 path build against the libraries in $DEPS, hence
-# "those". An output is reused only when its record equals this commit's.
+#   dxmt  Wine's, build-dxmt.sh, patches/dxmt
+#   d3d9  the libraries', build-d3d9.sh, patches/dxvk
+# Wine and the D3D9 path build against the libraries in $DEPS, and DXMT
+# links Wine's winecrt0, hence "those" and "Wine's". An output is reused only when its record equals this commit's.
 # Otherwise it is deleted with the sources its build changes in place, and
 # built again from fresh ones:
 #   deps  $DEPS, and $SRC and $WORK, which hold everything else
 #   wine  $WORK/wine-install, and $SRC/wine, which build-wine.sh patches
 #         (build-deps.sh unpacks it again)
+#   dxmt  $WORK/dxmt-install, and $SRC/dxmt, which build-dxmt.sh patches
+#         (its LLVM stays: build-dxmt.sh builds it again when its revision
+#         changes)
 #   d3d9  $WORK/d3d9-install, and build-d3d9.sh's git checkouts (it patches
 #         DXVK's)
 # Only this script writes a record, once the build has succeeded, and each
@@ -132,13 +137,14 @@ preflight() {
 # deleted when the libraries' inputs change.
 #
 # package-engine.sh makes everything else in the engine again on every run,
-# from the snapshot: DXMT, DepotDownloader, Meridian's helpers, the prefix
+# from the snapshot: DepotDownloader, Meridian's helpers, the prefix
 # template and the license texts. Downloads in $DL are named by version, and
 # every URL and revision is in the scripts. Not recorded: the host's tools
 # (Xcode's clang, Homebrew's mingw-w64, meson and LLVM, the dotnet SDK).
 SNAPSHOT="$BUILD_ROOT/snapshot"
 DEPS_INPUTS=(Scripts/engine/env.sh Scripts/engine/build-deps.sh)
 WINE_INPUTS=("${DEPS_INPUTS[@]}" Scripts/engine/build-wine.sh Scripts/engine/patches/wine)
+DXMT_INPUTS=("${WINE_INPUTS[@]}" Scripts/engine/build-dxmt.sh Scripts/engine/patches/dxmt)
 D3D9_INPUTS=("${DEPS_INPUTS[@]}" Scripts/engine/build-d3d9.sh Scripts/engine/patches/dxvk)
 
 # The record of paths at $SOURCE_COMMIT, one "<git object> <path>" per line.
@@ -175,6 +181,11 @@ build_engine() {
     else
         rm -rf "$WORK/wine-install" "$SRC/wine"
     fi
+    if built_from dxmt "${DXMT_INPUTS[@]}" && [ -f "$WORK/dxmt-install/versions.txt" ]; then
+        say "DXMT: built from these inputs already"
+    else
+        rm -rf "$WORK/dxmt-install" "$SRC/dxmt"
+    fi
     if built_from d3d9 "${D3D9_INPUTS[@]}" && [ -f "$WORK/d3d9-install/versions.txt" ]; then
         say "D3D9 path: built from these inputs already"
     else
@@ -185,6 +196,8 @@ build_engine() {
     record deps "${DEPS_INPUTS[@]}"
     [ -x "$WORK/wine-install/bin/wine" ] || bash "$e/build-wine.sh"
     record wine "${WINE_INPUTS[@]}"
+    [ -f "$WORK/dxmt-install/versions.txt" ] || bash "$e/build-dxmt.sh"
+    record dxmt "${DXMT_INPUTS[@]}"
     [ -f "$WORK/d3d9-install/versions.txt" ] || bash "$e/build-d3d9.sh"
     record d3d9 "${D3D9_INPUTS[@]}"
     bash "$e/package-engine.sh" "$TAG"
@@ -231,18 +244,11 @@ upstream() {
     echo "$DL/$name"
 }
 
-# Wine's winecrt0, which DXMT's release build links statically into
-# winemetal.dll: DXMT's CI builds against the prebuilt Wine of 3Shain's
-# v8.16-3shain release (DXMT v0.80's .github/workflows/ci.yml, WINE_URL).
-# LGPL-2.1, so its source goes in the zip. Change it with DXMT_VERSION
-# (package-engine.sh) when a new DXMT's CI names another Wine.
-DXMT_WINE_SOURCE_URL="https://github.com/3Shain/wine/archive/4dd8a2d6dca39a116d0911f247bbaf1ad5e29471.tar.gz"
-
 # The source of the engine's LGPL and GPL parts, as built:
-#   meridian/   the public repo at $TAG (scripts, Wine/DXVK/DepotDownloader patches)
-#   upstream/   Wine and its libraries, nettle, GLib and the subprojects it
-#               built, the Wine whose winecrt0 is in DXMT's winemetal.dll, and
-#               every package built into the GPL DepotDownloader binary
+#   meridian/   the public repo at $TAG (scripts, Wine/DXMT/DXVK/DepotDownloader patches)
+#   upstream/   Wine and its libraries (DXMT's winemetal.dll links this
+#               Wine's winecrt0), nettle, GLib and the subprojects it built,
+#               and every package built into the GPL DepotDownloader binary
 #               (licenses/depotdownloader/NOTICES.txt names them)
 # Not in it: the compiler runtimes linked into the Windows binaries (libgcc,
 # the MinGW-w64 runtime), and the other permissive components, whose
@@ -263,9 +269,6 @@ make_source_zip() {
         cp "$file" "$dir/upstream/"
         printf '%s\t%s\t%s\n' "${file##*/}" "$(shasum -a 256 "$file" | cut -d' ' -f1)" "$url" >> "$sources"
     done
-    file="$(upstream "$DXMT_WINE_SOURCE_URL" "wine-3shain-$(basename "$DXMT_WINE_SOURCE_URL" .tar.gz | cut -c1-8).tar.gz")"
-    cp "$file" "$dir/upstream/"
-    printf '%s\t%s\t%s\n' "${file##*/}" "$(shasum -a 256 "$file" | cut -d' ' -f1)" "$DXMT_WINE_SOURCE_URL" >> "$sources"
     # GLib's fallback subprojects (proxy-libintl, libffi, PCRE2) as meson
     # fetched them into the source tree.
     tar -C "$(unpacked "$GLIB_URL")" --exclude .git -czf "$dir/upstream/glib-subprojects.tar.gz" subprojects
@@ -342,7 +345,7 @@ gh release create "$TAG" --repo "$ENGINE_REPO" --verify-tag --latest=false --tit
 Meridian engine, built from source by Scripts/engine/.
 
 - Wine $(cat "$SRC/wine/VERSION" | sed 's/Wine version //') from its published ${WINE_SOURCE_VERSION} source (LGPL-2.1) plus the Meridian patches
-- DXMT $(sed 's/DXMT //' "$STAGE/wine/meridian-dxmt-version.txt") (D3D10/11 → Metal), selected per launch via WINEDLLPATH
+- $(cat "$STAGE/wine/meridian-dxmt-version.txt") (D3D10/11 → Metal), selected per launch via WINEDLLPATH
 - DXVK d3d9, the Khronos Vulkan loader and Mesa KosmicKrisp (D3D9 → Metal on macOS 26, for games that opt in): $(cat "$STAGE/wine/meridian-d3d9-version.txt")
 - MoltenVK 1.4.2, GnuTLS, GStreamer (VideoToolbox decode)
 - x86_64 under Rosetta 2, WoW64 for 32-bit games, 32-bit Wine modules built with SSE math

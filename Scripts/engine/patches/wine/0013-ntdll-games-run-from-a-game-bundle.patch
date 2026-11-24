@@ -1,0 +1,128 @@
+--- a/loader/wine_info.plist.in
++++ b/loader/wine_info.plist.in
+@@ -12,8 +12,6 @@
+     <string>com.meridian.app.wineloader</string>
+     <key>CFBundleInfoDictionaryVersion</key>
+     <string>6.0</string>
+-    <key>CFBundleName</key>
+-    <string>Meridian Game</string>
+     <key>CFBundlePackageType</key>
+     <string>APPL</string>
+     <key>CFBundleShortVersionString</key>
+@@ -26,5 +24,9 @@
+     <string>WineApplication</string>
+     <key>LSUIElement</key>
+     <string>1</string>
++    <key>LSApplicationCategoryType</key>
++    <string>public.app-category.games</string>
++    <key>GCSupportsGameMode</key>
++    <true/>
+ </dict>
+ </plist>
+--- a/dlls/ntdll/unix/loader.c
++++ b/dlls/ntdll/unix/loader.c
+@@ -70,6 +70,7 @@
+ # include <mach/mach_error.h>
+ # include <mach-o/getsect.h>
+ # include <crt_externs.h>
++# include <sys/clonefile.h>
+ # ifndef _POSIX_SPAWN_DISABLE_ASLR
+ #  define _POSIX_SPAWN_DISABLE_ASLR 0x0100
+ # endif
+@@ -605,11 +606,85 @@
+ }
+ 
+ 
+-static char *create_preloader_link(const char *wineloader_path, const char *exe_name)
++/* Meridian: a game runs from its own copy of the loader, in an app bundle. macOS
++ * gives Game Mode only to a process whose executable is inside a bundle that says
++ * it is a game (gamepolicyd: "labelReason=LSSupportsGameMode (Info.plist)"), and
++ * it finds the bundle from the kernel's path for the executable. For a file with
++ * several hard links that path is the name looked up last, and a Wine session
++ * looks the loader up under its other names all the time: as a link in the
++ * bundle, the game was ignored (Nov 24 2026; a stand-in was taken for a game 6
++ * times of 6 as a copy, and 6 times of 12 as a link). So each game gets a clone
++ * of the loader, which takes no disk space. The engine ships "Meridian Game.app"
++ * beside the loader: its Info.plist is the loader's embedded one byte for byte,
++ * which is what the loader's signature covers, and its MacOS directory holds the
++ * ntdll.so link the loader looks for beside itself. That plist has no
++ * CFBundleName: with one, the Dock would call every game in the bundle by it,
++ * and without one each keeps its executable's name, as outside a bundle. A game
++ * is an executable in a Steam library (steamapps/common); Steam, its helpers and
++ * Wine's own processes keep their links in the temporary directory. Returns the
++ * bundle's directory with room for exe_name, or NULL when the temporary
++ * directory is where this program belongs.
++ */
++static char *game_bundle_dir(const char *wineloader_path, const char *exe_name, const char *image_path)
+ {
++    static const char bundle[] = "Meridian Game.app/Contents/MacOS/";
++    const char *slash = strrchr(wineloader_path, '/');
++    char *p, *dir, *image = strdup(image_path);
++    int is_game;
++
++    if (!image) return NULL;
++    for (p = image; *p; p++) if (*p == '\\') *p = '/';
++    is_game = strcasestr(image, "/steamapps/common/") != NULL;
++    free(image);
++    if (!is_game || !slash) return NULL;
++
++    if (!(dir = malloc(MAX_PATH))) return NULL;
++    if (snprintf(dir, MAX_PATH, "%.*s/%s", (int)(slash - wineloader_path), wineloader_path, bundle)
++            + strlen(exe_name) < MAX_PATH && !access(dir, W_OK | X_OK))
++        return dir;
++    free(dir);
++    return NULL;
++}
++
++/* Meridian: puts the game's own copy of the loader at path. Returns 0 when it is there. */
++static int clone_loader_for_game(const char *wineloader_path, const char *path)
++{
++    struct stat st, loader_st;
++
++    if (stat(wineloader_path, &loader_st)) return -1;
++    if (!lstat(path, &st))
++    {
++        /* A clone keeps the loader's size and modification time. One made from this
++         * loader is used again (the game's other processes run from it); one left by
++         * a loader since replaced, or a link to the loader, is made anew.
++         */
++        if (S_ISREG(st.st_mode) && st.st_ino != loader_st.st_ino && st.st_size == loader_st.st_size &&
++            st.st_mtimespec.tv_sec == loader_st.st_mtimespec.tv_sec &&
++            st.st_mtimespec.tv_nsec == loader_st.st_mtimespec.tv_nsec)
++            return 0;
++        unlink(path);
++    }
++    /* EEXIST: another process of the same game made it a moment ago. */
++    if (!clonefile(wineloader_path, path, 0) || errno == EEXIST) return 0;
++    ERR("no copy of the loader at %s (%s): the game runs without Game Mode\n", debugstr_a(path), strerror(errno));
++    return -1;
++}
++
++static char *create_preloader_link(const char *wineloader_path, const char *exe_name, const char *image_path)
++{
+     struct stat st;
+-    char *linkpath = create_tempdir(wineloader_path);
++    char *linkpath = game_bundle_dir(wineloader_path, exe_name, image_path);
+ 
++    if (linkpath)
++    {
++        strlcat(linkpath, exe_name, MAX_PATH);
++        if (!clone_loader_for_game(wineloader_path, linkpath))
++            return linkpath;
++        free(linkpath);
++    }
++
++    linkpath = create_tempdir(wineloader_path);
++
+     if (!linkpath)
+         return NULL;
+ 
+@@ -636,7 +711,7 @@
+     char *app_name = extract_exe_name(image_path);
+     if (app_name)
+     {
+-        char *preloader_path = create_preloader_link(*wineloader_path, app_name);
++        char *preloader_path = create_preloader_link(*wineloader_path, app_name, image_path);
+         if (preloader_path)
+         {
+             free(*wineloader_path);

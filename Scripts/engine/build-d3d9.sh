@@ -40,22 +40,6 @@ PATCHES="$(cd "$(dirname "$0")" && pwd)/patches/dxvk"
 VENV="$BUILD_ROOT/venv-mesa"
 MESA_TOOLS="$WORK/mesa-native-tools"
 
-# A git checkout of $1 at revision $3 in $2, fetched shallow when it's a commit.
-checkout() {
-    local repo="$1" dir="$2" rev="$3"
-    if [ ! -d "$dir/.git" ]; then
-        git init -q "$dir"
-        git -C "$dir" remote add origin "$repo"
-    fi
-    local have want
-    have="$(git -C "$dir" rev-parse -q --verify HEAD 2>/dev/null || true)"
-    want="$(git -C "$dir" rev-parse -q --verify "$rev^{commit}" 2>/dev/null || true)"
-    if [ -z "$have" ] || [ "$have" != "$want" ]; then
-        git -C "$dir" fetch -q --depth 1 origin "$rev"
-        git -C "$dir" checkout -q -f FETCH_HEAD
-    fi
-}
-
 # MARK: - DXVK
 
 build_dxvk() {
@@ -63,13 +47,7 @@ build_dxvk() {
     say "DXVK $DXVK_COMMIT"
     checkout "$DXVK_REPO" "$src" "$DXVK_COMMIT"
     git -C "$src" submodule -q update --init --recursive --depth 1
-    local p
-    for p in "$PATCHES"/*.patch; do
-        [ -e "$p" ] || continue
-        if git -C "$src" apply -R --check "$p" 2>/dev/null; then continue; fi
-        say "Applying $(basename "$p")"
-        git -C "$src" apply "$p" || die "patch failed: $p"
-    done
+    apply_git_patches "$src" "$PATCHES"
 
     local bits arch
     for bits in 32 64; do

@@ -1,0 +1,36 @@
+From d815f7f4b3cb2b86be96302ffde55dd916c3f251 Mon Sep 17 00:00:00 2001
+From: Feifan He <feifan@codeweavers.com>
+Date: Mon, 26 Oct 2026 18:47:48 +0800
+Subject: [PATCH] fix(winemetal): fix memory leaks in
+ `WMTQueryDisplaySettingForLayer()`
+
+Fix #237
+
+Signed-off-by: Feifan He <feifan@codeweavers.com>
+---
+ src/winemetal/unix/winemetal_unix.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/src/winemetal/unix/winemetal_unix.c b/src/winemetal/unix/winemetal_unix.c
+index 3acafcb..2776e47 100644
+--- a/src/winemetal/unix/winemetal_unix.c
++++ b/src/winemetal/unix/winemetal_unix.c
+@@ -2497,6 +2497,7 @@ _WMTQueryDisplaySettingForLayer(void *obj) {
+   CAMetalLayer *layer = (CAMetalLayer *)params->layer;
+   struct WMTHDRMetadata *hdr_metadata_out = params->hdr_metadata.ptr;
+ 
++  @autoreleasepool {
+   params->version = 0;
+   if (![layer.delegate isKindOfClass:NSView.class])
+     return STATUS_SUCCESS;
+@@ -2519,6 +2520,7 @@ _WMTQueryDisplaySettingForLayer(void *obj) {
+       layer.wantsExtendedDynamicRangeContent ? screen.maximumExtendedDynamicRangeColorComponentValue : 1.0;
+   params->edr_value.maximum_potential_edr_color_component_value =
+       screen.maximumPotentialExtendedDynamicRangeColorComponentValue;
++  }
+ 
+   return STATUS_SUCCESS;
+ }
+-- 
+2.54.0 (Apple Git-157)
+
