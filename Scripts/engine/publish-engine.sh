@@ -10,12 +10,12 @@
 # leaves the tarball at $BUILD_ROOT/meridian-engine-arm64.tar.gz: the build
 # an upload of the same commit would publish, and reuses.
 #
-#   1. build-deps.sh      x86_64 libraries
+#   1. build-deps.sh      x86_64 libraries, and MoltenVK with Meridian's patches (Vulkan → Metal)
 #   2. build-wine.sh      Wine from its published LGPL source
 #   3. build-dxmt.sh      DXMT with Meridian's patches, and its LLVM (D3D10/11 → Metal)
 #   4. build-d3d9.sh      DXVK d3d9, Vulkan loader, KosmicKrisp (D3D9 → Metal)
 #   5. package-engine.sh  stage, relink, sign, prefix template, tarball
-#   6. smoke/smoke-test.sh  DXMT, wined3d and DXVK (32/64-bit) and HTTPS, headless
+#   6. smoke/smoke-test.sh  DXMT, wined3d and DXVK (32/64-bit), Vulkan and HTTPS, headless
 #   7. public repo        PUBLIC_PATHS of this commit, committed and tagged vX.Y.Z-engine
 #   8. source archive     meridian-engine-vX.Y.Z-engine-source.zip: that tag, and the
 #                         upstream source of the LGPL and GPL components and of
@@ -112,7 +112,7 @@ preflight() {
 # a record, $WORK/stamps/<output>.inputs: the git object, at the commit that
 # built it, of every path it is built from (a folder's object is its tree,
 # which changes when any file in it is added, changed or removed):
-#   deps  env.sh, build-deps.sh
+#   deps  env.sh, build-deps.sh, patches/moltenvk, patches/spirv-cross
 #   wine  those, build-wine.sh, patches/wine
 #   dxmt  Wine's, build-dxmt.sh, patches/dxmt
 #   d3d9  the libraries', build-d3d9.sh, patches/dxvk
@@ -142,7 +142,7 @@ preflight() {
 # every URL and revision is in the scripts. Not recorded: the host's tools
 # (Xcode's clang, Homebrew's mingw-w64, meson and LLVM, the dotnet SDK).
 SNAPSHOT="$BUILD_ROOT/snapshot"
-DEPS_INPUTS=(Scripts/engine/env.sh Scripts/engine/build-deps.sh)
+DEPS_INPUTS=(Scripts/engine/env.sh Scripts/engine/build-deps.sh Scripts/engine/patches/moltenvk Scripts/engine/patches/spirv-cross)
 WINE_INPUTS=("${DEPS_INPUTS[@]}" Scripts/engine/build-wine.sh Scripts/engine/patches/wine)
 DXMT_INPUTS=("${WINE_INPUTS[@]}" Scripts/engine/build-dxmt.sh Scripts/engine/patches/dxmt)
 D3D9_INPUTS=("${DEPS_INPUTS[@]}" Scripts/engine/build-d3d9.sh Scripts/engine/patches/dxvk)
@@ -245,7 +245,7 @@ upstream() {
 }
 
 # The source of the engine's LGPL and GPL parts, as built:
-#   meridian/   the public repo at $TAG (scripts, Wine/DXMT/DXVK/DepotDownloader patches)
+#   meridian/   the public repo at $TAG (scripts, Wine/DXMT/DXVK/MoltenVK/DepotDownloader patches)
 #   upstream/   Wine and its libraries (DXMT's winemetal.dll links this
 #               Wine's winecrt0), nettle, GLib and the subprojects it built,
 #               and every package built into the GPL DepotDownloader binary
@@ -347,7 +347,7 @@ Meridian engine, built from source by Scripts/engine/.
 - Wine $(cat "$SRC/wine/VERSION" | sed 's/Wine version //') from its published ${WINE_SOURCE_VERSION} source (LGPL-2.1) plus the Meridian patches
 - $(cat "$STAGE/wine/meridian-dxmt-version.txt") (D3D10/11 → Metal), selected per launch via WINEDLLPATH
 - DXVK d3d9, the Khronos Vulkan loader and Mesa KosmicKrisp (D3D9 → Metal on macOS 26, for games that opt in): $(cat "$STAGE/wine/meridian-d3d9-version.txt")
-- MoltenVK 1.4.2, GnuTLS, GStreamer (VideoToolbox decode)
+- MoltenVK 1.4.2 from source plus the Meridian patches (Vulkan → Metal), GnuTLS, GStreamer (VideoToolbox decode)
 - x86_64 under Rosetta 2, WoW64 for 32-bit games, 32-bit Wine modules built with SSE math
 
 Not included: Apple D3DMetal, any closed-source component, the gbe_fork Steamworks emulator, Valve binaries.

@@ -15,6 +15,9 @@
 #      the Vulkan loader and KosmicKrisp (64- and 32-bit), with a read-back
 #   5. A program in a Steam library runs from the engine's game bundle, and
 #      macOS takes it for a game (what Game Mode needs)
+#   6. Vulkan through MoltenVK, headless: a 4x multisampled fragment shader in
+#      which one invocation of a subgroup writes for the others loses no write
+#      (Godot's Forward+ light clusters; patches/moltenvk)
 
 source "$(dirname "$0")/../env.sh"
 
@@ -24,6 +27,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 OUT="$WORK/smoke"
 P="$WORK/smoke-prefix"
 TIMEOUT="$(command -v gtimeout || command -v timeout)" || die "brew install coreutils (gtimeout)"
+command -v glslangValidator >/dev/null || die "brew install glslang"
 
 [ -x "$W/bin/wine64" ] || die "no engine at $ENGINE"
 
@@ -35,6 +39,15 @@ i686-w64-mingw32-gcc   -O2 -o "$OUT/presentprobe32.exe" "$HERE/presentprobe.c" -
 x86_64-w64-mingw32-gcc -O2 -municode -o "$OUT/tlsprobe64.exe" "$HERE/tlsprobe.c" -lwinhttp
 x86_64-w64-mingw32-gcc -O2 -o "$OUT/d3d9probe64.exe" "$HERE/d3d9probe.c" -ld3d9 -lgdi32 -luser32
 i686-w64-mingw32-gcc   -O2 -o "$OUT/d3d9probe32.exe" "$HERE/d3d9probe.c" -ld3d9 -lgdi32 -luser32
+# The Vulkan probe's shaders, as SPIR-V in one header; Vulkan's headers are
+# the ones MoltenVK was built with.
+: > "$OUT/vksubgroupprobe_spv.h"
+for shader in vert:vert pick.frag:pick_frag all.frag:all_frag; do
+    glslangValidator -V --quiet --target-env vulkan1.1 --vn "probe_${shader#*:}" -o "$OUT/shader.h" \
+        "$HERE/vksubgroupprobe.${shader%%:*}" || die "vksubgroupprobe.${shader%%:*} doesn't compile"
+    cat "$OUT/shader.h" >> "$OUT/vksubgroupprobe_spv.h"
+done
+x86_64-w64-mingw32-gcc -O2 -I"$DEPS/include" -I"$OUT" -o "$OUT/vksubgroupprobe64.exe" "$HERE/vksubgroupprobe.c"
 
 rm -rf "$P"; cp -R "$ENGINE/prefix-template" "$P"
 ln -sfn ../drive_c "$P/dosdevices/c:"
@@ -89,6 +102,10 @@ if [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 26 ]; then
     run dxvk d3d9probe32.exe 'Radeon' 'RESULT PASS'
     RUN_ENV=()
 fi
+
+# One invocation of a subgroup writing for the others, under 4x multisampling:
+# stock MoltenVK 1.4.2 loses about a fifth of the writes in every run.
+run wined3d vksubgroupprobe64.exe '4 samples: [1-9][0-9]* marks, 0 lost' 'RESULT PASS'
 
 # A game is a program in a Steam library that another Windows program starts,
 # as Steam does: the loader puts a copy of itself in the game bundle for it

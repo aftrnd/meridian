@@ -1,0 +1,62 @@
+Multisampled fragment shaders on Apple GPUs: each invocation is a subgroup
+of its own
+
+Godot 4's Forward+ renderer builds its light clusters by drawing each light's
+volume in a pass with four samples per pixel whose fragment shader marks the
+tiles and depth slices the light reaches. To save atomic writes it has one
+invocation of each subgroup write for the others:
+
+    uint first = subgroupBroadcastFirst(cluster_offset);
+    mask = subgroupBallot(first == cluster_offset);
+    ...
+    if (subgroupBallotExclusiveBitCount(mask) == 0)
+        atomicOr(cluster_render.data[...], bit);
+
+On Apple GPUs a multisampled fragment function runs threads whose buffer
+writes Metal discards, and nothing tells them from the others:
+simd_is_helper_thread() is false for them, their coverage mask is not empty
+and they take part in SIMD-group ballots. When such a thread is the first of
+its group the write is lost, the tile never learns of the light and is drawn
+unlit: black squares that flicker on lit surfaces
+(https://github.com/godotengine/godot/issues/104168, and #121201 for Godot's
+own Metal driver, which Godot 4.8 fixes for macOS builds only; a Windows
+build under Wine runs the code above).
+
+Measured on an Apple M5 Ultra (macOS 27.2) with a Metal program that draws 24
+light volumes as Godot does and compares the tiles marked with those marked
+when every thread writes: with four samples the shader above lost 9% of the
+light bits, some in every one of 300 runs; with one sample none. A static
+Godot 4.6.3 scene of 24 lights under Wine showed tiles missing a light in 78%
+of its frames (80% on Godot 4.7.2); with this patch every frame is the same
+picture.
+
+With this patch a fragment shader of a multisampled pipeline is translated
+with subgroups of one invocation (SPIRV-Cross's emulate_subgroups, which
+patches/spirv-cross extends to every subgroup operation), so each invocation
+writes for itself. Which invocations share a subgroup is the
+implementation's choice in Vulkan; gl_SubgroupSize reads 1 in these shaders.
+
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm b/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm
+index 7eae64c..f68e421 100644
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm
+@@ -1686,6 +1686,19 @@ static void setEmulatedReversedDepthViewportConfig(SPIRVToMSLConversionConfigura
+ 			}
+ #endif
+ 			shaderConfig.options.mslOptions.force_sample_rate_shading = pCreateInfo->pMultisampleState->sampleShadingEnable && pCreateInfo->pMultisampleState->minSampleShading != 0.0f;
++
++			/* Meridian: on Apple GPUs a multisampled fragment function runs SIMD-group threads whose
++			 * buffer writes Metal discards, although simd_is_helper_thread() is false for them and
++			 * their coverage mask is not empty. A shader that has one invocation of a subgroup
++			 * write for all of it loses the write when such a thread is the one chosen. Godot's light
++			 * cluster pass does that (subgroupBroadcastFirst, subgroupBallot, then atomicOr by the first
++			 * invocation, in a 4x pass) and leaves black tiles on lit surfaces (godotengine/godot#104168).
++			 * With one sample no write is lost. So in a multisampled pipeline each fragment invocation
++			 * is a subgroup of its own. */
++			if (getPhysicalDevice()->getMTLDeviceCapabilities().isAppleGPU &&
++				pCreateInfo->pMultisampleState->rasterizationSamples != VK_SAMPLE_COUNT_1_BIT) {
++				shaderConfig.options.mslOptions.emulate_subgroups = true;
++			}
+ 		}
+ 		if (std::any_of(shaderOutputs.begin(), shaderOutputs.end(), [](const SPIRVShaderOutput& output) { return output.builtin == spv::BuiltInLayer; })) {
+ 			shaderConfig.options.mslOptions.arrayed_subpass_input = true;

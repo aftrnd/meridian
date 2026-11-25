@@ -11,7 +11,7 @@
 # Nothing here is taken from an installed product. Components:
 #   Wine        published LGPL-2.1 source + Meridian's patches       build-wine.sh
 #   libraries   GnuTLS, nettle, gmp, freetype, SDL2, GLib, GStreamer   build-deps.sh
-#   MoltenVK    Khronos release (Apache-2.0)                           build-deps.sh
+#   MoltenVK    KhronosGroup/MoltenVK (Apache-2.0) + Meridian's patches  build-deps.sh
 #   DXMT        3Shain/dxmt (MIT) + Meridian's patches, with LLVM 15    build-dxmt.sh
 #   DXVK d3d9, Vulkan-Loader, KosmicKrisp (zlib, Apache-2.0, MIT)       build-d3d9.sh
 #   DepotDownloader  Meridian's fork (GPL-2.0), from source every time  build-depotdownloader.sh
@@ -401,7 +401,8 @@ stage_licenses() {
         done
     done
     cp "$DXMT_INSTALL"/licenses/* "$d/"
-    license moltenvk-LICENSE.txt            "$WORK/MoltenVK/LICENSE"
+    license moltenvk-LICENSE.txt            "$SRC/moltenvk-git/LICENSE"
+    license spirv-cross-LICENSE.txt         "$SRC/spirv-cross-git/LICENSE"
     cp "$D3D9_INSTALL"/licenses/* "$d/"
     license gnutls-LICENSE.txt              "$SRC/gnutls/gnutls/LICENSE"
     license gnutls-LGPL-2.1.txt             "$SRC/gnutls/gnutls/doc/COPYING.LESSER"
@@ -432,7 +433,8 @@ Wine 11.0 (source ${WINE_SOURCE_VERSION} as published by CodeWeavers)  LGPL-2.1
 DXMT (Meridian's patches/dxmt applied)             MIT        https://github.com/3Shain/dxmt
 LLVM (built into DXMT's winemetal.so)              Apache-2.0 with LLVM exceptions  https://llvm.org
   Revisions: $(cat "$DXMT_INSTALL/versions.txt")
-MoltenVK 1.4.2                                     Apache-2.0 https://github.com/KhronosGroup/MoltenVK
+MoltenVK 1.4.2 (Meridian's patches/moltenvk applied)  Apache-2.0 https://github.com/KhronosGroup/MoltenVK
+SPIRV-Cross (built into MoltenVK; Meridian's patches/spirv-cross applied)  Apache-2.0 https://github.com/KhronosGroup/SPIRV-Cross
 DXVK (d3d9; Meridian's patches/dxvk applied)       zlib       https://github.com/doitsujin/dxvk
 Vulkan-Loader                                      Apache-2.0 https://github.com/KhronosGroup/Vulkan-Loader
 Mesa KosmicKrisp                                   MIT        https://gitlab.freedesktop.org/mesa/mesa
@@ -494,6 +496,11 @@ validate() {
     for f in "${SWITCHED_DLLS[@]}"; do
         [ ! -e "$W/lib/wine/x86_64-windows/$f.dll" ] || die "$f.dll still in lib/wine (would shadow WINEDLLPATH)"
     done
+    # MoltenVK is the patched build: an unpatched SPIRV-Cross still carries
+    # the refusal that patches/spirv-cross removes, and Godot's Forward+
+    # games would draw black tiles again.
+    ! strings -a "$W/lib64/libMoltenVK.dylib" | grep -q "Subgroup emulation does not support operations other than Elect" \
+        || die "lib64/libMoltenVK.dylib is built without patches/spirv-cross"
     # No absolute build paths may survive in the shipped Mach-O files.
     local leaks
     leaks=$(find "$W" -type f \( -name '*.dylib' -o -name '*.so' \) -exec otool -L {} + 2>/dev/null \

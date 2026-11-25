@@ -1,0 +1,190 @@
+MSL: emulate every subgroup operation, not Elect alone
+
+With emulate_subgroups an invocation is a subgroup of its own (size one,
+invocation index zero), and the compiler refused every operation but
+OpGroupNonUniformElect. MoltenVK set the option only where Metal has no
+SIMD-group functions, and there it reports no other operation.
+
+Meridian's MoltenVK sets it for the fragment shaders of multisampled
+pipelines on Apple GPUs (patches/moltenvk says why), which use the
+operations MoltenVK does report. So each gets its meaning in a subgroup of
+one invocation, with no SIMD-group call:
+
+  Elect, AllEqual                          true
+  All, Any, Broadcast, BroadcastFirst,
+  Shuffle*, Rotate, Quad*, reductions,
+  inclusive scans                          the invocation's own value
+  exclusive scans (sum, product)           the identity, 0 or 1
+  Ballot                                   bit 0
+  InverseBallot, BallotBitExtract,
+  BallotBitCount, BallotFindLSB/MSB        as before: bit arithmetic on the
+                                           ballot with gl_SubgroupSize 1 and
+                                           gl_SubgroupInvocationID 0
+
+Checked with a fragment shader that uses all of them: the output compiles
+with Xcode 27.2's Metal compiler.
+
+diff --git a/spirv_msl.cpp b/spirv_msl.cpp
+index c5a9d433..9d15eb22 100644
+--- a/spirv_msl.cpp
++++ b/spirv_msl.cpp
+@@ -17601,14 +17601,117 @@ void CompilerMSL::emit_subgroup_op(const Instruction &i)
+ 
+ 	if (msl_options.emulate_subgroups)
+ 	{
+-		// In this mode, only the GroupNonUniform cap is supported. The only op
+-		// we need to handle, then, is OpGroupNonUniformElect.
+-		if (op != OpGroupNonUniformElect)
+-			SPIRV_CROSS_THROW("Subgroup emulation does not support operations other than Elect.");
+-		// In this mode, the subgroup size is assumed to be one, so every invocation
+-		// is elected.
+-		emit_op(ops[0], ops[1], "true", true);
+-		return;
++		// Meridian: every operation, where this mode took Elect alone.
++		// In this mode every invocation is a subgroup of its own: the subgroup
++		// size is one and the invocation's index in it is zero. No SIMD-group
++		// function is called. The ballot operations that are plain bit
++		// arithmetic on a ballot go on to the code below, where the emulated
++		// gl_SubgroupSize (1) and gl_SubgroupInvocationID (0) give the answer.
++		uint32_t emu_idx = 2;
++		switch (op)
++		{
++		// These have no scope operand.
++		case OpSubgroupBallotKHR:
++		case OpSubgroupFirstInvocationKHR:
++		case OpSubgroupReadInvocationKHR:
++		case OpSubgroupAllKHR:
++		case OpSubgroupAnyKHR:
++		case OpSubgroupAllEqualKHR:
++		case OpGroupNonUniformQuadAllKHR:
++		case OpGroupNonUniformQuadAnyKHR:
++			break;
++		default:
++			if (static_cast<Scope>(evaluate_constant_u32(ops[emu_idx++])) != ScopeSubgroup)
++				SPIRV_CROSS_THROW("Only subgroup scope is supported.");
++			break;
++		}
++
++		bool emulated = true;
++		switch (op)
++		{
++		case OpGroupNonUniformElect:
++		case OpGroupNonUniformAllEqual:
++		case OpSubgroupAllEqualKHR:
++			// The only invocation is the first one, and equal to itself.
++			emit_op(ops[0], ops[1], "true", true);
++			break;
++
++		case OpGroupNonUniformAll:
++		case OpSubgroupAllKHR:
++		case OpGroupNonUniformAny:
++		case OpSubgroupAnyKHR:
++		case OpGroupNonUniformQuadAllKHR:
++		case OpGroupNonUniformQuadAnyKHR:
++		case OpGroupNonUniformBroadcast:
++		case OpSubgroupReadInvocationKHR:
++		case OpGroupNonUniformBroadcastFirst:
++		case OpSubgroupFirstInvocationKHR:
++		case OpGroupNonUniformShuffle:
++		case OpGroupNonUniformShuffleXor:
++		case OpGroupNonUniformShuffleUp:
++		case OpGroupNonUniformShuffleDown:
++		case OpGroupNonUniformRotateKHR:
++		case OpGroupNonUniformQuadBroadcast:
++		case OpGroupNonUniformQuadSwap:
++			// The invocation's own value. (Reading any other invocation is
++			// undefined, there being none.)
++			emit_unary_func_op(ops[0], ops[1], ops[emu_idx], "");
++			break;
++
++		case OpGroupNonUniformBallot:
++		case OpSubgroupBallotKHR:
++		{
++			// Bit zero is this invocation's.
++			bool forward = should_forward(ops[emu_idx]);
++			emit_op(ops[0], ops[1], join("uint4(uint(", to_unpacked_expression(ops[emu_idx]), "), 0u, 0u, 0u)"), forward);
++			inherit_expression_dependencies(ops[1], ops[emu_idx]);
++			break;
++		}
++
++		case OpGroupNonUniformFAdd:
++		case OpGroupNonUniformFMul:
++		case OpGroupNonUniformIAdd:
++		case OpGroupNonUniformIMul:
++		case OpGroupNonUniformFMin:
++		case OpGroupNonUniformFMax:
++		case OpGroupNonUniformSMin:
++		case OpGroupNonUniformSMax:
++		case OpGroupNonUniformUMin:
++		case OpGroupNonUniformUMax:
++		case OpGroupNonUniformBitwiseAnd:
++		case OpGroupNonUniformBitwiseOr:
++		case OpGroupNonUniformBitwiseXor:
++		case OpGroupNonUniformLogicalAnd:
++		case OpGroupNonUniformLogicalOr:
++		case OpGroupNonUniformLogicalXor:
++		{
++			auto operation = static_cast<GroupOperation>(ops[emu_idx++]);
++			if (operation == GroupOperationExclusiveScan)
++			{
++				// Nothing comes before the only invocation: the identity.
++				bool is_sum = op == OpGroupNonUniformFAdd || op == OpGroupNonUniformIAdd;
++				if (!is_sum && op != OpGroupNonUniformFMul && op != OpGroupNonUniformIMul)
++					SPIRV_CROSS_THROW("Metal doesn't support ExclusiveScan for this subgroup operation.");
++				emit_op(ops[0], ops[1], join(type_to_glsl(get<SPIRType>(ops[0])), is_sum ? "(0)" : "(1)"), true);
++			}
++			else if (operation == GroupOperationReduce || operation == GroupOperationInclusiveScan ||
++			         operation == GroupOperationClusteredReduce)
++				emit_unary_func_op(ops[0], ops[1], ops[emu_idx], "");
++			else
++				SPIRV_CROSS_THROW("Invalid group operation.");
++			break;
++		}
++
++		default:
++			emulated = false;
++			break;
++		}
++
++		if (emulated)
++		{
++			register_control_dependent_expression(ops[1]);
++			return;
++		}
+ 	}
+ 
+ 	// Metal 2.0 is required. iOS only supports quad ops on 11.0 (2.0), with
+@@ -19328,6 +19431,33 @@ void CompilerMSL::OpCodePreprocessor::check_resource_write(uint32_t var_id)
+ // Returns an enumeration of a SPIR-V function that needs to be output for certain Op codes.
+ CompilerMSL::SPVFuncImpl CompilerMSL::OpCodePreprocessor::get_spv_func_impl(Op opcode, const uint32_t *args, uint32_t length)
+ {
++	// Meridian: with emulated subgroups these are emitted inline (see
++	// emit_subgroup_op()), so their SIMD-group helper functions are not needed.
++	if (self.msl_options.emulate_subgroups)
++	{
++		switch (opcode)
++		{
++		case OpGroupNonUniformBroadcast:
++		case OpSubgroupReadInvocationKHR:
++		case OpGroupNonUniformBroadcastFirst:
++		case OpSubgroupFirstInvocationKHR:
++		case OpGroupNonUniformBallot:
++		case OpSubgroupBallotKHR:
++		case OpGroupNonUniformAllEqual:
++		case OpSubgroupAllEqualKHR:
++		case OpGroupNonUniformShuffle:
++		case OpGroupNonUniformShuffleXor:
++		case OpGroupNonUniformShuffleUp:
++		case OpGroupNonUniformShuffleDown:
++		case OpGroupNonUniformRotateKHR:
++		case OpGroupNonUniformQuadBroadcast:
++		case OpGroupNonUniformQuadSwap:
++			return SPVFuncImplNone;
++		default:
++			break;
++		}
++	}
++
+ 	switch (opcode)
+ 	{
+ 	case OpSMod:

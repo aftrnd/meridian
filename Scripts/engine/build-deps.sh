@@ -98,23 +98,37 @@ build_sdl2() {
 }
 
 build_moltenvk() {
-    # Upstream Khronos release (Apache-2.0). The macOS dylib is universal; keep
-    # only the x86_64 slice. Vulkan headers come from the same tarball.
-    # The download is named after the version it's fetched for, so changing
-    # one changes the other.
-    local version="1.4.2"
-    local tar="$DL/MoltenVK-macos-$version.tar"
-    [ -f "$tar" ] || curl -fsSL -o "$tar" "https://github.com/KhronosGroup/MoltenVK/releases/download/v$version/MoltenVK-macos.tar"
-    rm -rf "$WORK/MoltenVK"; tar -C "$WORK" -xf "$tar"
-    local dylib
-    dylib="$(find "$WORK/MoltenVK" -name libMoltenVK.dylib -path '*dynamic*' | head -1)"
-    [ -n "$dylib" ] || die "libMoltenVK.dylib not found in MoltenVK release"
+    # Khronos MoltenVK (Apache-2.0) from source at its release tag with
+    # patches/moltenvk, and with the SPIRV-Cross revision that release pins
+    # plus patches/spirv-cross (the patches say why). It builds as its release
+    # does, with Xcode: MoltenVK's script fetches the libraries it links at
+    # the revisions it pins and builds them, taking SPIRV-Cross from the
+    # patched checkout, then `make macos` makes the universal dylib. The engine
+    # keeps the x86_64 slice. Vulkan's headers come from the same build.
+    local version="1.4.2" commit="db66022459ffb663aa2b50f6b018bc2e124f5edf"    # v1.4.2
+    # The checkouts are named apart from the moltenvk folder that the Wine
+    # source tarball unpacks.
+    local src="$SRC/moltenvk-git" cross="$SRC/spirv-cross-git" patches
+    patches="$(cd "$(dirname "$0")" && pwd)/patches"
+    xcodebuild -version >/dev/null 2>&1 || export DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
+    xcodebuild -version >/dev/null 2>&1 || die "MoltenVK builds with Xcode: install it"
+    checkout "https://github.com/KhronosGroup/MoltenVK.git" "$src" "$commit"
+    apply_git_patches "$src" "$patches/moltenvk"
+    checkout "https://github.com/KhronosGroup/SPIRV-Cross.git" "$cross" "$(cat "$src/ExternalRevisions/SPIRV-Cross_repo_revision")"
+    apply_git_patches "$cross" "$patches/spirv-cross"
+    # Xcode's own tools, not the GNU ones env.sh puts first on PATH, and
+    # MoltenVK's own deployment target.
+    local xcode_env=(env -u MACOSX_DEPLOYMENT_TARGET PATH="/usr/bin:/bin:/usr/sbin:/sbin")
+    ( cd "$src" && "${xcode_env[@]}" ./fetchDependencies --macos --spirv-cross-root "$cross" > "$WORK/moltenvk-libraries.log" 2>&1 ) \
+        || { tail -20 "$WORK/moltenvk-libraries.log"; die "MoltenVK's libraries failed to build"; }
+    ( cd "$src" && "${xcode_env[@]}" make macos > "$WORK/moltenvk-build.log" 2>&1 ) \
+        || { grep -m10 error: "$WORK/moltenvk-build.log"; die "MoltenVK $version failed to build"; }
+    local dylib="$src/Package/Release/MoltenVK/dynamic/dylib/macOS/libMoltenVK.dylib"
+    [ -f "$dylib" ] || die "MoltenVK's build left no libMoltenVK.dylib"
     mkdir -p "$DEPS/lib" "$DEPS/include"
-    lipo "$dylib" -thin x86_64 -output "$DEPS/lib/libMoltenVK.dylib" 2>/dev/null \
-        || cp "$dylib" "$DEPS/lib/libMoltenVK.dylib"
+    lipo "$dylib" -thin x86_64 -output "$DEPS/lib/libMoltenVK.dylib"
     install_name_tool -id "$DEPS/lib/libMoltenVK.dylib" "$DEPS/lib/libMoltenVK.dylib"
-    local inc; inc="$(find "$WORK/MoltenVK" -type d -name include -path '*MoltenVK/include' | head -1)"
-    cp -R "$inc/"* "$DEPS/include/"
+    cp -R "$src/Package/Release/MoltenVK/include/"* "$DEPS/include/"
 }
 
 build_glib() {
